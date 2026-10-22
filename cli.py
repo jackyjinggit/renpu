@@ -1,0 +1,452 @@
+# -*- coding: utf-8 -*-
+"""仁谱 Renpu · 终端 CLI —— agent / 人 双入口
+
+设计约定：
+  · 默认输出**文本**给人看，加 `--json` 切结构化（agent 用）
+  · 任何命令 --json 都吐结构化，agent 无需解析表格
+  · 人名/关键词一律模糊匹配，找不到给候选清单而不是空结果
+  · 错误尽可能给可执行指引，而不是 traceback（除非排障时用 `grm doctor --verbose`）
+"""
+import argparse
+import json
+import sys
+import time
+import traceback
+from pathlib import Path
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import core
+from adapters import wechat as wx
+
+
+def out(obj, as_json):
+    """agent 用 --json 拿结构；人看默认文本渲染。"""
+    if as_json:
+        print(json.dumps(obj, ensure_ascii=False, indent=2, default=str))
+    else:
+        _pretty(obj)
+
+
+# 键的中文短名（渲染用；不改数据，只影响人看的排版）
+LABELS = {
+    "person_key": "ID", "display_name": "姓名", "tier": "层", "circle": "圈",
+    "org": "组织", "role": "角色", "relation": "关系", "msg_total": "消息",
+    "msg_d30": "30天", "last_seen": "最近", "last_active": "最近",
+    "tags": "标签", "alias": "微信号", "nickname": "昵称", "remark": "备注",
+    "snippet": "内容", "when": "时间", "who": "谁", "kind": "类型",
+    "title": "标题", "detail": "详情", "weight": "权重", "to": "→",
+    "name": "名称", "member_cnt": "成员", "msg_total ": "消息",
+    "src_name": "A", "dst_name": "B", "conv_key": "会话", "done": "已办",
+}
+HIDE_KEYS = {"person_key", "conv_key", "room_key", "last_msg", "signature",
+             "channel", "channel_id", "avatar", "created_at", "updated_at",
+             "first_seen", "note", "source", "has_pii", "mtype",
+             "sender", "msg_d7", "real_name", "src", "dst",
+             "todo_id", "id"}
+
+
+def _fmt_ts(v):
+    """unix → YYYY-MM-DD（录屏时裸时间戳很难看）。"""
+    try:
+        return time.strftime("%Y-%m-%d", time.localtime(float(v)))
+    except Exception:
+        return v
+
+
+def _row(r):
+    """一行 dict → 干净单行（去内部键、去 wxid、去空值、中文标签）。"""
+    if not isinstance(r, dict):
+        return f"  ▸ {r}"
+    name = (r.get("display_name") or r.get("src_name") or r.get("snippet")
+            or r.get("title") or r.get("name") or "")
+    if name and len(str(name)) > 46:
+        name = str(name)[:46] + "…"
+    parts = []
+    for k, v in r.items():
+        if k in HIDE_KEYS or v in (None, "", 0, False):
+            continue
+        if k in ("display_name", "src_name", "snippet", "dst_name", "title"):
+            continue          # 标题已作行首展示
+        # wxid / room_key 一律不出现在人看的输出里（微信不支持 wxid 搜人）
+        if isinstance(v, str) and (v.startswith("wx:") or v.startswith("wxroom:")
+                                   or v.startswith("wxid_") or v.endswith("@chatroom")):
+            continue
+        if isinstance(v, (list, tuple)):
+            if not v:
+                continue
+            v = "/".join(str(x) for x in v[:5])
+        if k == "weight":
+            parts.append(f"共现{int(v)}群")
+            continue
+        if k == "kind" and v == "co_group":
+            continue
+        if k == "todo_id":
+            continue
+        if k in ("last_active", "due"):
+            v = _fmt_ts(v) if isinstance(v, (int, float)) and v > 1e8 else v
+        parts.append(f"{LABELS.get(k, k)}={v}")
+    tail = f"  → {r['dst_name']}" if r.get("dst_name") else ""
+    return f"  ▸ {name}   {' · '.join(parts)}{tail}"
+
+
+def _pretty(o):
+    if isinstance(o, dict):
+        if isinstance(o.get("rows"), list):
+            head = str(o.get("title", "结果")).split("·")[0].strip()
+            rows = o["rows"]
+            print(f"── {head} · {len(rows)} 条 " + "─" * 3)
+            for r in rows:
+                print(_row(r))
+            return
+        # 顶层 title 不重复打印（who/search 的 title 已由上面 sections 表达）
+        for k, v in o.items():
+            if k in ("title", "candidates", "hint"):
+                continue
+            if isinstance(v, (dict, list)) and v:
+                print(f"{k}:")
+                _pretty(v)
+            elif k not in HIDE_KEYS and v not in (None, "", 0, False):
+                val = _fmt_ts(v) if isinstance(v, (int, float)) and v > 1e8 else v
+                print(f"  {LABELS.get(k, k)}: {val}")
+        if o.get("candidates"):
+            print("  可能的人选: " + " / ".join(o["candidates"]))
+        return
+    if isinstance(o, list):
+        for x in o:
+            print(_row(x))
+        return
+    print(o)
+
+
+# ─────────────────────── 命令 ───────────────────────
+
+def cmd_init(a):
+    core.init_db()
+    print(f"✅ 仁谱库就绪：{core.DB_PATH}")
+
+
+def cmd_doctor(a):
+    """自检：探测环境/依赖/配置/微信源，并把「下一步该做什么」列出来。"""
+    import config
+    desc = config.describe()
+    db_exists = Path(desc["db_path"]).exists()
+    issues = []
+    rec = []
+
+    try:
+        from Crypto.Cipher import AES  # noqa
+        crypto_ok = True
+    except ImportError:
+        crypto_ok = False
+        issues.append("缺 pycryptodome（pip install pycryptodome 或在 venv 里）")
+
+    if not config.WC_LIVE and not config.WC_EXPORT:
+        rec.append("没配置微信源。第一步：跑 `renpu ingest --demo` 看效果；或者把 wc_live 写到 config.json")
+
+    if not db_exists:
+        rec.append(f"库还没建。跑 `renpu init`（数据落 {desc['db_path']}）")
+
+    print(f"── 仁谱 Renpu 体检 · {desc['platform']}")
+    print(f"  代码区 .................... {desc['app_home']}")
+    print(f"  pycryptodome .............. {'✅' if crypto_ok else '❌'}")
+    print(f"  库 路径 ................... {desc['db_path']}  {'✅' if db_exists else '⚠️ 未建'}")
+    print(f"  微信 live 库 .............. {desc['wc_live'] or '❌ 未配置'}")
+    print(f"  微信 wc_export ............ {desc['wc_export'] or '— 未配置（可选）'}")
+    print(f"  自己的 wxid ............... {desc['self_wxid']}")
+    print(f"  配置文件 .................. {desc['config_file']}")
+    if desc["env_overrides"]:
+        print(f"  环境变量覆盖 .............. {', '.join(desc['env_overrides'])}")
+
+    if issues:
+        print("\n⚠️ 问题：")
+        for x in issues: print(f"   · {x}")
+    if rec:
+        print("\n👣 下一步建议：")
+        for i, x in enumerate(rec, 1):
+            print(f"   {i}. {x}")
+        print("\n   → 跑 `renpu ingest --demo` 立刻体验（无需任何配置）")
+    print(f"\n  {'✅ 一切就绪' if not issues else '⚠️ 需修复'}")
+
+
+def cmd_adapters(a):
+    """列出可用数据源。"""
+    print("── 仁谱数据源适配器 ──")
+    print("  · wechat     微信 4.x （SQLCipher4 + WAL）  ← 真实使用")
+    print("  · demo       合成数据                ← 无配置体验用")
+    if not core.connect().execute("SELECT 1 FROM sync_log WHERE source='wechat'").fetchone():
+        print("\n  还没有真实摄取记录。先用 demo 跑通流程：renpu ingest --demo")
+
+
+def cmd_pull(a):
+    print(wx.pull_fresh())
+
+
+def cmd_ingest(a):
+    """摄取数据。两条路径：
+        --demo         合成数据（无需任何配置，全新用户第一跑）
+        （默认）        从微信库拉（需 wc_live 或 wc_export，已配置才会成功）
+    """
+    if a.demo:
+        from adapters import demo
+        r = demo.ingest(progress=print if not a.json else (lambda *_: None))
+        print(f"✅ 演示数据注入完成：人 {r['people']} · 消息 {r['messages']} · 关系边 {r['edges']}")
+        out(r, a.json)
+        return
+    # 真实路径
+    if a.pull:
+        wx.pull_fresh()
+    if not (wx.WC_LIVE or wx.WC_EXPORT):
+        raise SystemExit(
+            "未配置微信源（wc_live 或 wc_export）。\n"
+            "  · 想先体验：`renpu ingest --demo`\n"
+            "  · 要接真微信：在 %LOCALAPPDATA%\\renpu\\config.json 写：\n"
+            "      {\"wc_live\": \"D:/.../db_storage\"}"
+        )
+    r = wx.ingest(days=a.days, progress=print if not a.json else (lambda *_: None))
+    print(f"✅ 摄取完成：人 {r['people']} · 群 {r['rooms']} · 消息索引 {r['messages']} · 关系边 {r['edges']}")
+    out(r, a.json)
+
+
+def cmd_sync(a):
+    """向后兼容的旧名 → 等同 `ingest`（无 --demo 时）。"""
+    a.demo = False
+    cmd_ingest(a)
+
+
+def cmd_stats(a):
+    con = core.connect()
+    st = core.stats(con)
+    con.close()
+    out(st, a.json)
+
+
+def cmd_people(a):
+    con = core.connect()
+    where, vals = [], []
+    if a.days:
+        where.append("last_active > ?"); vals.append(time.time() - a.days * 86400)
+    if a.q:
+        where.append("(display_name LIKE ? OR real_name LIKE ?)")
+        vals += [f"%{a.q}%", f"%{a.q}%"]
+    sql = "SELECT person_key, display_name, tier, circle, org, msg_total, msg_d30, last_active FROM person"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += f" ORDER BY last_active DESC LIMIT {a.limit}"
+    rows = [dict(r) for r in con.execute(sql, vals).fetchall()]
+    for r in rows:
+        r["last_seen"] = time.strftime("%Y-%m-%d", time.localtime(r["last_active"])) if r["last_active"] else None
+        r["tags"] = core.person_tags(con, r["person_key"])
+        r.pop("last_active")
+    con.close()
+    out({"title": f"人 · {len(rows)}", "rows": rows}, a.json)
+
+
+def cmd_who(a):
+    con = core.connect()
+    p = core.get_person(con, a.name)
+    if not p:
+        cands = [r["display_name"] for r in con.execute(
+            "SELECT display_name FROM person WHERE display_name LIKE ? LIMIT 8", (f"%{a.name}%",))]
+        con.close()
+        out({"title": f"未找到「{a.name}」", "candidates": cands,
+             "hint": "微信库无此人，或用 --name 微信号/备注"}, a.json)
+        return
+    pk = p["person_key"]
+    ident = con.execute(
+        "SELECT alias, nickname, remark FROM identity WHERE person_key=?", (pk,)).fetchone()
+    conv = con.execute("SELECT * FROM conversation WHERE person_key=? ORDER BY last_ts DESC LIMIT 1", (pk,)).fetchone()
+    msgs = [dict(r) for r in con.execute(
+        "SELECT ts, sender, dir, snippet FROM msg_index WHERE conv_key=? ORDER BY ts DESC LIMIT ?",
+        (pk, a.limit)).fetchall()]
+    for m in msgs:
+        m["when"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(m["ts"]))
+        m["who"] = "我" if m["dir"] else (con.execute("SELECT display_name FROM person WHERE person_key=?", (m["sender"],)).fetchone() or ["?"])[0]
+        m.pop("ts"); m.pop("dir"); m.pop("sender")
+    rooms = [r["name"] for r in con.execute(
+        "SELECT r.name FROM room_member rm JOIN room r ON r.room_key=rm.room_key "
+        "WHERE rm.person_key=? ORDER BY r.member_cnt LIMIT 10", (pk,)).fetchall()]
+    edges = [{"dst_name": nm, "weight": w} for nm, w in con.execute(
+        "SELECT COALESCE(p.display_name, e.dst), e.weight FROM edge e "
+        "LEFT JOIN person p ON p.person_key=e.dst WHERE e.src=? "
+        "ORDER BY e.weight DESC LIMIT 10", (pk,)).fetchall()]
+    tags = core.person_tags(con, pk)
+    todos = [dict(r) for r in con.execute(
+        "SELECT title,due,kind FROM todo WHERE person_key=? AND status='open'", (pk,)).fetchall()]
+    events = [dict(r) for r in con.execute(
+        "SELECT kind,ts,title FROM event WHERE person_key=? ORDER BY ts DESC LIMIT 10", (pk,)).fetchall()]
+    for e in events:
+        e["when"] = time.strftime("%Y-%m-%d", time.localtime(e["ts"]))
+        e.pop("ts", None)
+    con.close()
+    prof = dict(p)
+    prof["last_active"] = _fmt_ts(prof["last_active"]) if prof.get("last_active") else None
+    ident_d = dict(ident) if ident else None
+    if ident_d:
+        ident_d.pop("channel", None); ident_d.pop("channel_id", None)
+    if ident_d and not any(ident_d.values()):
+        ident_d = None
+    out({"title": p["display_name"], "profile": prof, "identity": ident_d, "tags": tags,
+         "recent": msgs, "rooms": rooms, "edges": edges, "todos": todos, "events": events}, a.json)
+
+
+def cmd_search(a):
+    con = core.connect()
+    q = a.q.replace('"', '""')
+    rows = [dict(r) for r in con.execute(
+        "SELECT snippet, person_key, conv_key, ts FROM msg_fts WHERE msg_fts MATCH ? ORDER BY ts DESC LIMIT ?",
+        (q, a.limit)).fetchall()]
+    for r in rows:
+        r["when"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["ts"]))
+        nm = con.execute("SELECT display_name FROM person WHERE person_key=?", (r["person_key"],)).fetchone()
+        r["who"] = nm[0] if nm else r["person_key"]
+        r.pop("ts"); r.pop("person_key")
+    con.close()
+    out({"title": f"搜索「{a.q}」· {len(rows)} 条", "rows": rows}, a.json)
+
+
+def cmd_feed(a):
+    con = core.connect()
+    since = time.time() - a.days * 86400
+    rows = [dict(r) for r in con.execute(
+        "SELECT m.ts, m.dir, m.snippet, m.sender, c.person_key FROM msg_index m "
+        "JOIN conversation c ON c.conv_key=m.conv_key WHERE m.ts>? ORDER BY m.ts DESC LIMIT ?",
+        (since, a.limit)).fetchall()]
+    for r in rows:
+        r["when"] = time.strftime("%m-%d %H:%M", time.localtime(r["ts"]))
+        nm = con.execute("SELECT display_name FROM person WHERE person_key=?", (r["sender"],)).fetchone()
+        r["who"] = "我" if r["dir"] else (nm[0] if nm else r["sender"])
+        r.pop("ts"); r.pop("dir"); r.pop("sender"); r.pop("person_key")
+    con.close()
+    out({"title": f"近 {a.days} 天动态 · {len(rows)} 条", "rows": rows}, a.json)
+
+
+def cmd_note(a):
+    """落一条人际事件或待办：agent 看完对话的结论写回。"""
+    con = core.connect()
+    p = core.get_person(con, a.name) if a.name else None
+    if a.todo:
+        core.add_todo(con, a.text, p["person_key"] if p else None, kind=a.kind or "followup")
+    else:
+        core.add_event(con, p["person_key"] if p else None, a.kind or "ai_note",
+                       int(time.time()), title=a.text, source="ai")
+    con.commit(); con.close()
+    print(f"✅ 已写入 {'待办' if a.todo else '事件'}：{a.text}")
+
+
+def cmd_todo(a):
+    con = core.connect()
+    if a.done:
+        con.execute("UPDATE todo SET status='done', closed_at=? WHERE todo_id=?", (time.time(), a.done))
+        con.commit(); con.close(); print(f"✅ 待办 {a.done} 已关闭"); return
+    rows = [dict(r) for r in con.execute(
+        "SELECT t.todo_id, t.title, t.kind, t.due, p.display_name FROM todo t "
+        "LEFT JOIN person p ON p.person_key=t.person_key WHERE t.status='open' ORDER BY t.due").fetchall()]
+    con.close()
+    out({"title": f"待办 · {len(rows)}", "rows": rows}, a.json)
+
+
+def cmd_edges(a):
+    con = core.connect()
+    rows = [dict(r) for r in con.execute(
+        "SELECT e.src, e.dst, e.kind, e.weight, s.display_name AS src_name, d.display_name AS dst_name "
+        "FROM edge e LEFT JOIN person s ON s.person_key=e.src LEFT JOIN person d ON d.person_key=e.dst "
+        "ORDER BY e.weight DESC LIMIT ?", (a.limit,)).fetchall()]
+    con.close()
+    out({"title": f"关系边 TOP {a.limit}", "rows": rows}, a.json)
+
+
+def cmd_rooms(a):
+    con = core.connect()
+    rows = [dict(r) for r in con.execute(
+        "SELECT room_key,name,member_cnt,msg_total,last_active FROM room ORDER BY msg_total DESC LIMIT ?",
+        (a.limit,)).fetchall()]
+    for r in rows:
+        r["last_seen"] = time.strftime("%Y-%m-%d", time.localtime(r["last_active"])) if r["last_active"] else None
+        r.pop("last_active")
+    con.close()
+    out({"title": f"群 · {len(rows)}", "rows": rows}, a.json)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="renpu", description="仁谱 Renpu · 人脉的谱系",
+                                 formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 epilog="""仁谱做什么：
+  把你的联系人变成一张谱 —— 谁是谁的人、在哪些群共现、
+  什么时候答应过什么、上次聊到哪里。agent 可查可写。
+
+快速上手：
+  renpu doctor                  # 自检环境
+  renpu init                    # 建库
+  renpu ingest --demo           # 零配置，先体验
+  renpu who 林夏              # 查一个人的完整档案
+  renpu edges                   # 关系谱（群共现强度）
+  renpu search 黑客松            # 全文检索
+  renpu serve                   # 起本地 API 给 agent
+""")
+    ap.add_argument("--json", action="store_true", help="输出 JSON（agent 用）")
+    ap.add_argument("--verbose", action="store_true", help="错误时打印完整 traceback（排障用）")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("init", help="建库").set_defaults(fn=cmd_init)
+    sub.add_parser("doctor", help="环境自检：配置/依赖/下一步建议").set_defaults(fn=cmd_doctor)
+    sub.add_parser("adapters", help="列出可用数据源").set_defaults(fn=cmd_adapters)
+    sub.add_parser("pull", help="解密拉取最新微信快照").set_defaults(fn=cmd_pull)
+
+    s = sub.add_parser("ingest", help="摄取数据入库（默认微信库；加 --demo 用演示数据）")
+    s.add_argument("--days", type=int, default=90)
+    s.add_argument("--demo", action="store_true", help="用演示合成数据（无需任何配置）")
+    s.add_argument("--pull", action="store_true", help="先解密再摄取（仅真实路径）"); s.set_defaults(fn=cmd_ingest)
+
+    s = sub.add_parser("sync", help="[兼容] 旧名 = ingest")
+    s.add_argument("--days", type=int, default=90)
+    s.add_argument("--pull", action="store_true"); s.set_defaults(fn=cmd_sync)
+
+    sub.add_parser("stats", help="总览统计").set_defaults(fn=cmd_stats)
+
+    s = sub.add_parser("people", help="人列表"); s.add_argument("--days", type=int)
+    s.add_argument("-q"); s.add_argument("--limit", type=int, default=30); s.set_defaults(fn=cmd_people)
+
+    s = sub.add_parser("who", help="单人档案：基本信息 + 近期对话 + 群 + 关系谱 + 待办 + 事件")
+    s.add_argument("name")
+    s.add_argument("--limit", type=int, default=30); s.set_defaults(fn=cmd_who)
+
+    s = sub.add_parser("search", help="全文检索消息"); s.add_argument("q")
+    s.add_argument("--limit", type=int, default=30); s.set_defaults(fn=cmd_search)
+
+    s = sub.add_parser("feed", help="近期消息流"); s.add_argument("--days", type=int, default=7)
+    s.add_argument("--limit", type=int, default=50); s.set_defaults(fn=cmd_feed)
+
+    s = sub.add_parser("note", help="写回事件/待办"); s.add_argument("text")
+    s.add_argument("--name"); s.add_argument("--kind"); s.add_argument("--todo", action="store_true"); s.set_defaults(fn=cmd_note)
+
+    s = sub.add_parser("todo", help="待办清单"); s.add_argument("--done", type=int); s.set_defaults(fn=cmd_todo)
+
+    s = sub.add_parser("edges", help="关系谱：谁跟谁在多少个群里共现")
+    s.add_argument("--limit", type=int, default=40); s.set_defaults(fn=cmd_edges)
+
+    s = sub.add_parser("rooms", help="群列表"); s.add_argument("--limit", type=int, default=30); s.set_defaults(fn=cmd_rooms)
+
+    s = sub.add_parser("serve", help="起本地 HTTP API（仅 127.0.0.1）")
+    s.add_argument("--port", type=int, default=int(__import__('config').DEFAULT_PORT))
+    s.set_defaults(fn=lambda a: __import__('server').serve(a.port))
+
+    a = ap.parse_args()
+    try:
+        a.fn(a)
+    except SystemExit:
+        raise
+    except Exception as e:
+        if getattr(a, "verbose", False):
+            traceback.print_exc()
+        else:
+            print(f"\n❌ {e}\n", file=sys.stderr)
+            print("💡 跑 `grm doctor` 看环境诊断。",
+                  "想看 traceback 加 `--verbose` 重跑同命令。",
+                  file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

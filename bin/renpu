@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Renpu CLI launcher for Unix / macOS
+# 用法：renpu who 姓名 / renpu search 关键词 / renpu ingest --demo
+#
+# 自动找一个能 import Crypto.Cipher 的 python；不假设任何固定路径。
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT="$(dirname "$HERE")"
+
+has_crypto() { [ -n "$1" ] && "$1" -c "from Crypto.Cipher import AES" >/dev/null 2>&1; }
+
+PY="${RENPU_PYTHON:-${GRM_PYTHON:-}}"
+
+if [ -z "$PY" ] || ! has_crypto "$PY"; then
+  for cand in python3 python; do
+    found="$(command -v "$cand" 2>/dev/null)"
+    if has_crypto "$found"; then PY="$found"; break; fi
+    [ -z "$PY" ] && PY="$found"
+  done
+fi
+
+if ! has_crypto "$PY"; then
+  echo "[X] 找不到带 pycryptodome 的 Python。" >&2
+  echo "    装它：pip install pycryptodome" >&2
+  echo "    或把带该依赖的 python 路径写进 RENPU_PYTHON 环境变量。" >&2
+  exit 1
+fi
+
+exec "$PY" "$PARENT/cli.py" "$@"

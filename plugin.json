@@ -1,0 +1,72 @@
+{
+  "name": "renpu",
+  "displayName": {
+    "en": "Renpu (Relationship Genealogy)",
+    "zh": "仁谱 · 人脉的谱系"
+  },
+  "version": "0.2.0",
+  "description": {
+    "en": "Local-first relationship genealogy. Turns your WeChat records into a queryable graph of PEOPLE — who knows whom, which groups they co-occur in, what you promised whom, when you last talked. CLI + 127.0.0.1-only HTTP API for any agent. Ships with synthetic demo data so you can try it before configuring anything.",
+    "zh": "本地优先的人脉谱系。把微信记录变成一张「人」的图谱——谁是谁的人、在哪些群共现、答应过什么、上次聊到哪。CLI + 仅绑本机的 HTTP API，任何 agent 可查可写。出厂自带演示数据，不配任何东西就能先试。"
+  },
+  "author": {
+    "name": "Jacky Jiang (蒋平)",
+    "url": "https://github.com/jackyjinggit"
+  },
+  "license": "Apache-2.0",
+  "languages": ["zh", "en"],
+  "platforms": ["win32", "darwin", "linux"],
+  "categories": ["productivity", "knowledge-base", "agent-tools"],
+  "tags": [
+    "wechat",
+    "relationship-graph",
+    "social-graph",
+    "personal-vault",
+    "local-first",
+    "cli",
+    "agent-tool",
+    "contact-graph",
+    "crm-alternative"
+  ],
+  "entry": {
+    "skill": "SKILL.md",
+    "cli": "bin/renpu",
+    "cli_win": "bin/renpu.cmd",
+    "server": "server.py"
+  },
+  "requirements": {
+    "runtime": {
+      "min_python": "3.10",
+      "libs": ["pycryptodome>=3.10"],
+      "libs_optional": []
+    },
+    "system": [],
+    "network": false
+  },
+  "channels": [
+    {
+      "name": "demo",
+      "built_in": true,
+      "requires_config": false,
+      "description": {
+        "en": "Synthetic data — works out of the box, no WeChat required.",
+        "zh": "合成演示数据 — 出厂即可跑，不需要微信。"
+      }
+    },
+    {
+      "name": "wechat",
+      "built_in": true,
+      "requires_config": true,
+      "config_keys": ["wc_live"],
+      "optional_config_keys": ["wc_export", "self_wxid"],
+      "description": {
+        "en": "WeChat 4.x local SQLCipher DB. Read-only; the source database is never modified.",
+        "zh": "微信 4.x 本地 SQLCipher 库。只读，绝不修改源数据库。"
+      }
+    }
+  ],
+  "positioning": {
+    "zh": "回答「他是谁的人」，不是「今天该做什么」。与情报日报类工具互补不重叠。",
+    "en": "Answers 'who is this person to me', not 'what should I do today'. Complementary to daily-intelligence tools, not overlapping."
+  }
+}

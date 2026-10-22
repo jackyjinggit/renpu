@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 仁谱本地产物
+renpu.db
+renpu.db-wal
+renpu.db-shm
+logs/
+exports/
+fresh_*/
+
+# 解密密钥与用户配置：绝不进仓（PII / 凭证红线）
+db_key.txt
+config.json
+
+# 本机生成物（含绝对路径，由 scripts/setup-demo-env.cmd 生成）
+scripts/activate-demo-env.cmd
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# 旧名遗留（v0.1 兼容读取，但不入仓）
+grm.db
+grm.db-wal
+grm.db-shm
+
+# 敏感：绝不进仓
+*.db
+*.db-journal
