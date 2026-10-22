@@ -4,7 +4,7 @@
     "en": "Renpu (Relationship Genealogy)",
     "zh": "仁谱 · 人脉的谱系"
   },
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": {
     "en": "Local-first relationship genealogy. Turns your WeChat records into a queryable graph of PEOPLE — who knows whom, which groups they co-occur in, what you promised whom, when you last talked. CLI + 127.0.0.1-only HTTP API for any agent. Ships with synthetic demo data so you can try it before configuring anything.",
     "zh": "本地优先的人脉谱系。把微信记录变成一张「人」的图谱——谁是谁的人、在哪些群共现、答应过什么、上次聊到哪。CLI + 仅绑本机的 HTTP API，任何 agent 可查可写。出厂自带演示数据，不配任何东西就能先试。"
@@ -13,7 +13,7 @@
     "name": "Jacky Jiang (蒋平)",
     "url": "https://github.com/jackyjinggit"
   },
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "languages": ["zh", "en"],
   "platforms": ["win32", "darwin", "linux"],
   "categories": ["productivity", "knowledge-base", "agent-tools"],

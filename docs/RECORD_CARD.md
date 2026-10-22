@@ -130,7 +130,7 @@ renpu ingest --pull
 
 【仁谱 v0.1。五分钟装好，本地跑，数据不出机器。】
 
-【Apache-2.0，蒋平，GitHub 上找 jackyjinggit。】
+【AGPL-3.0 开源，蒋平，GitHub 上找 jackyjinggit。】
 
 【demo 先跑——再决定要不要接你的真微信。】
 

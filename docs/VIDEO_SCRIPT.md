@@ -196,7 +196,7 @@ renpu sync --days 30 --pull
 
 **配音**：
 > 仁谱 v0.1 · 5 分钟装好。
-> Apache-2.0 · 蒋平 · GitHub 上找 jackyjinggit。
+> AGPL-3.0 开源 · 蒋平 · GitHub 上找 jackyjinggit。
 > demo 先跑 ——
 > 再决定要不要接你真微信。
 > 它是产品——但你是最终裁判。

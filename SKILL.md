@@ -5,10 +5,28 @@ description: 仁谱 Renpu · 人脉的谱系。任何人际类提问（X 是谁 
 allowed-tools: 
 disable-model-invocation: false
 user-invocable: true
-version: "0.2.0"
+version: "0.2.1"
 ---
 
+<!--
+  ┌─────────────────────────────────────────────────────────────┐
+  │  仁谱 Renpu · 由 蒋平 Jacky Jiang (jackyjinggit) 原创        │
+  │  项目主页：https://github.com/jackyjinggit/renpu             │
+  │  License: AGPL-3.0-only                                     │
+  │                                                              │
+  │  ⚠️ 转载/二次分发本 Skill 或其代码时，请保留：                │
+  │    ① 本出处声明与上游仓库链接                                 │
+  │    ② AGPL-3.0-only 许可（衍生作品同样适用）                 │
+  │    ③ 在文档中标注「基于 Renpu」并说明改动                    │
+  │                                                              │
+  │  这不是软性请求，是 AGPL §5(a) 的署名义务。                  │
+  └─────────────────────────────────────────────────────────────┘
+-->
+
 # 仁谱 Renpu（agent 接入指南）
+
+> **仁谱 Renpu** · 人脉的谱系 · 原作者 **蒋平 Jacky Jiang** · https://github.com/jackyjinggit/renpu
+> License: **AGPL-3.0-only**（衍生作品须同样开放源码并保留署名）
 
 > 人脉的谱系。做的是「**他是谁的人**」，不是「今天有什么该做」。
 > 任何人际类提问，**先查 renpu**，不要重跑解密流水线——解密一次约 6 秒 + 摄取 30-90 秒，

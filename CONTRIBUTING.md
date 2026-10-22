@@ -55,4 +55,6 @@ python tests/test_smoke.py        # 应 ALL GREEN
 
 ## License
 
-贡献即同意本项目 Apache-2.0。
+贡献即同意本项目 AGPL-3.0-only。
+
+如果你需要闭源集成 / 白标 / 商业授权，见 `LICENSE` 末尾的 RENPU ADDITIONAL TERMS NOTICE。
