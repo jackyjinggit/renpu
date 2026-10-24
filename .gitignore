@@ -35,3 +35,8 @@ grm.db-shm
 # 敏感：绝不进仓
 *.db
 *.db-journal
+
+# PyInstaller 本地构建产物
+build/
+dist/
+*.spec
