@@ -74,11 +74,11 @@ git branch -D public-release   # 推完可删，本地已有 tag 归档
 ```bash
 # 打首个 tag（干净历史上的）
 git checkout public-release
-git tag -a v0.2.0 -m "Renpu v0.2.0 -- first public release"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "Renpu v0.3.0 -- first public release"
+git push origin v0.3.0
 
 # 上传 zip 作为 Release 附件（可选，别人可免 clone 直接下载）
-# 在 GitHub Release 页面拖入 renpu-v0.2.zip
+# 在 GitHub Release 页面拖入 renpu-v0.3.zip
 ```
 
 **建议开 Release**：内测阶段给人 zip 比 clone 方便，且 zip 是 64 KB 单文件。
@@ -93,7 +93,7 @@ git push origin v0.2.0
 | 推送分支 | `public-release:main` |
 | 首 commit | 待填 |
 | 执行时间 | 待填 |
-| Release | 待填（是否开 v0.2.0） |
+| Release | 待填（是否开 v0.3.0） |
 | zip 附件 | 待填 |
 | 执行人 | 蒋平授权 / 鸿窗执行 |
 
