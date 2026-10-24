@@ -13,7 +13,12 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from pathlib import Path
+
+# Windows portable EXE 在 GBK cmd 下输出中文/符号时不崩。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -405,6 +410,13 @@ def cmd_tour(a):
     import sys as _sys
     argv = ["tour.py"] + (["--out", a.out] if a.out else []) + (["--keep"] if a.keep else [])
     _sys.argv = ["tour.py"] + argv[1:]
+    if getattr(sys, "frozen", False):
+        # Freeze 模式下把可执行的 sibling 明确传给 tour，避免误把
+        # _internal/cli.py 当成命令执行。
+        candidate = Path(sys.executable).parent.parent / "renpu-cli.exe"
+        if candidate.exists():
+            import os as _os
+            _os.environ["RENPU_CLI_FROZEN_EXE"] = str(candidate)
     runpy.run_path(str(Path(__file__).parent / "scripts" / "tour.py"), run_name="__main__")
 
 

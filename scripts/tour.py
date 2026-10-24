@@ -14,6 +14,12 @@ import os
 import subprocess
 import sys
 import tempfile
+
+# Windows portable EXE 在 GBK cmd 下也必须能跑；不能因 ✓/中文输出直接崩。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 import time
 from pathlib import Path
 
@@ -63,7 +69,31 @@ def main():
     py = sys.executable
 
     def run(args, quiet=False):
-        r = subprocess.run([py] + args, cwd=str(ROOT), env=env,
+        if getattr(sys, "frozen", False):
+            # PyInstaller may expose sys.executable as an internal script path;
+            # argv[0] remains the actual portable console executable.
+            forced = os.environ.get("RENPU_CLI_FROZEN_EXE")
+            raw = Path(sys.argv[0])
+            if forced and Path(forced).exists():
+                frozen_cli = Path(forced)
+            elif raw.suffix.lower() == ".exe":
+                frozen_cli = raw
+            else:
+                # one-dir PyInstaller: __file__/sys.executable may point to
+                # <bundle>/_internal/cli.py; the runnable sibling is two levels up.
+                candidate = Path(sys.executable).parent.parent / "renpu-cli.exe"
+                frozen_cli = candidate if candidate.exists() else Path(sys.executable)
+            # tour 在源码模式传入 [cli.py, command...]；冻结模式只需 command。
+            clean_args = list(args)
+            if clean_args and str(clean_args[0]).lower().endswith("cli.py"):
+                clean_args = clean_args[1:]
+            command = [str(frozen_cli), *clean_args]
+        else:
+            clean_args = list(args)
+            if clean_args and str(clean_args[0]).lower().endswith("cli.py"):
+                clean_args = clean_args[1:]
+            command = [py, str(ROOT / "cli.py"), *clean_args]
+        r = subprocess.run(command, cwd=str(ROOT), env=env,
                            capture_output=True, text=True,
                            encoding="utf-8", errors="replace")
         if r.returncode != 0:
