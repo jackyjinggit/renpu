@@ -18,7 +18,30 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import core
-from adapters import wechat as wx
+
+# 🔴 延迟导入微信适配器（2026-10-24 修）
+# 原因：adapters.wechat 顶层 import Crypto（pycryptodome），缺失时**整个 CLI 连
+#      doctor/stats 都跑不起来** —— 而这些命令根本不碰微信。
+# 修法：只在本模块真正用到 wx 时才 import；缺依赖时给出可执行指引而非 traceback。
+try:
+    from adapters import wechat as wx
+    _WX_IMPORT_ERROR = None
+except ModuleNotFoundError as e:  # pragma: no cover - 环境相关
+    wx = None
+    _WX_IMPORT_ERROR = str(e)
+
+
+def _require_wx():
+    """用到微信适配器时才检查依赖，给出可执行指引。"""
+    if wx is None:
+        raise SystemExit(
+            "微信适配器不可用：缺少 %s\n"
+            "  · 仅用演示数据可绕过：renpu ingest --demo\n"
+            "  · 或安装依赖：pip install pycryptodome\n"
+            "  · 其余命令（stats/who/search/people/edges/rooms/todo）不受影响"
+            % _WX_IMPORT_ERROR
+        )
+    return wx
 
 
 def out(obj, as_json):
@@ -180,7 +203,7 @@ def cmd_adapters(a):
 
 
 def cmd_pull(a):
-    print(wx.pull_fresh())
+    _require_wx().pull_fresh()
 
 
 def cmd_ingest(a):
@@ -195,6 +218,7 @@ def cmd_ingest(a):
         out(r, a.json)
         return
     # 真实路径
+    wx = _require_wx()
     if a.pull:
         wx.pull_fresh()
     if not (wx.WC_LIVE or wx.WC_EXPORT):
