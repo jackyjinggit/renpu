@@ -7,6 +7,17 @@ pip install pycryptodome
 ```
 > 唯一必需的依赖。
 
+## Step 1.5 · 【可选】先一键看看效果
+
+```bash
+renpu tour
+```
+
+1.6 秒跑完，会在临时目录产出一个关系图谱 HTML 和一份摘要报告。
+全程用合成数据，不碰你的微信。看一眼再决定要不要往下装。
+
+---
+
 ## Step 2 · 把 `renpu` 命令加进 PATH
 
 **Windows（PowerShell）**

@@ -112,6 +112,37 @@ def main():
     assert s1["messages_indexed"] == s2["messages_indexed"], "幂等失败：messages"
     print(f"  ✅ 幂等：{s2['people']} 人 / {s2['messages_indexed']} 消息 重跑无变化")
 
+    # 7. 图谱：生成 + 自包含 + 脱敏
+    gpath = TEST_HOME / "graph-test.html"
+    cli(["graph", "--share", "--out", str(gpath)])
+    gtxt = gpath.read_text(encoding="utf-8")
+    assert gpath.exists() and gpath.stat().st_size > 4000, "图谱文件太小，可能没生成"
+    # 零外链（不能依赖 CDN / 第三方 JS）
+    for bad in ("<script src", "cdn.", "unpkg", "jsdelivr"):
+        assert bad not in gtxt, f"图谱含外链：{bad}"
+    assert "graph-data" in gtxt, "图谱缺内嵌数据"
+    # 分享模式：群名必须脱敏
+    import re as _re
+    m = _re.search(r"<script id='graph-data' type='application/json'>(.*?)</script>", gtxt, _re.S)
+    assert m, "图谱数据块解析失败"
+    import json as _json
+    gd = _json.loads(m.group(1))
+    assert gd["nodes"], "图谱没有节点"
+    assert gd["links"], "图谱没有边"
+    room_names = {r["name"] for r in gd["rooms"]}
+    assert all("已脱敏" in n or n == "(群)" for n in room_names), f"分享模式群名没脱敏：{room_names}"
+    assert all(n.get("msg_total") is None for n in gd["nodes"]), "分享模式仍带消息数"
+    print(f"  ✅ 图谱：{len(gd['nodes'])} 节点 / {len(gd['links'])} 边 / 零外链 / 分享模式已脱敏")
+
+    # 8. 一键体验（tour）：独立目录跑，不碰测试库
+    tour_out = TEST_HOME / "tour"
+    cli(["tour", "--out", str(tour_out)])
+    assert (tour_out / "renpu-graph.html").exists(), "tour 没产出图谱"
+    assert (tour_out / "renpu-report.md").exists(), "tour 没产出报告"
+    rep = (tour_out / "renpu-report.md").read_text(encoding="utf-8")
+    assert "仁谱" in rep and "关系边" in rep, "tour 报告内容不对"
+    print("  ✅ tour：图谱 + 报告 都产出")
+
     print("\n✅ ALL GREEN")
 
 

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>仁谱 Renpu · 人脉的谱系</title>
+<meta name="description" content="把微信记录变成一张「人」的图谱 —— 谁是谁的人、在哪些群共现、答应过什么、上次聊到哪。本地优先，agent 可查可写。">
+<style>
+  :root{
+    --bg:#0d0f13; --bg2:#12151b; --panel:#171a21; --line:#252a35;
+    --text:#e9ebf2; --dim:#8b93a7; --dim2:#616a7d;
+    --accent:#ff7a6b; --accent2:#4ecdc4; --gold:#ffd166;
+    --mono:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text); line-height:1.7;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--accent2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+
+  /* ── hero ── */
+  header{padding:88px 0 64px;position:relative;overflow:hidden}
+  header::after{content:'';position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(900px 380px at 18% -8%,rgba(255,122,107,.13),transparent 65%),
+               radial-gradient(760px 340px at 82% 4%,rgba(78,205,196,.10),transparent 62%);}
+  .eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:2.2px;
+    text-transform:uppercase;color:var(--accent);border:1px solid rgba(255,122,107,.32);
+    border-radius:999px;padding:5px 13px;margin-bottom:24px;position:relative}
+  h1{font-size:clamp(34px,6vw,58px);line-height:1.1;letter-spacing:-1.2px;font-weight:700;margin-bottom:18px;position:relative}
+  h1 em{font-style:normal;color:var(--accent)}
+  .lead{font-size:clamp(16px,2.1vw,19px);color:var(--dim);max-width:660px;margin-bottom:30px;position:relative}
+  .lead b{color:var(--text);font-weight:600}
+  .cta{display:flex;gap:12px;flex-wrap:wrap;position:relative}
+  .cta a{display:inline-flex;align-items:center;gap:8px;padding:11px 20px;border-radius:9px;
+    font-size:14.5px;font-weight:550;transition:.16s}
+  .btn-primary{background:var(--accent);color:#180b09}
+  .btn-primary:hover{background:#ff8f82;text-decoration:none;transform:translateY(-1px)}
+  .btn-ghost{border:1px solid var(--line);color:var(--text)}
+  .btn-ghost:hover{border-color:var(--dim2);text-decoration:none;background:var(--bg2)}
+
+  /* ── section ── */
+  section{padding:56px 0;border-top:1px solid var(--line)}
+  .sec-label{font-size:11.5px;letter-spacing:2px;text-transform:uppercase;color:var(--dim2);margin-bottom:14px}
+  h2{font-size:clamp(23px,3.4vw,31px);letter-spacing:-.5px;font-weight:650;margin-bottom:12px}
+  .sec-sub{color:var(--dim);font-size:15.5px;max-width:720px;margin-bottom:34px}
+
+  /* ── code block ── */
+  pre{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:18px 20px;
+    overflow-x:auto;font-family:var(--mono);font-size:13.5px;line-height:1.85}
+  pre .c{color:var(--dim2)}
+  pre .p{color:var(--gold)}
+  pre .c2{color:var(--accent2)}
+
+  /* ── feature grid ── */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:18px}
+  .card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:22px 22px 20px;
+    transition:.18s}
+  .card:hover{border-color:#333a49;transform:translateY(-2px)}
+  .card .ic{font-size:19px;margin-bottom:11px;display:block}
+  .card h3{font-size:15.5px;font-weight:600;margin-bottom:8px}
+  .card p{color:var(--dim);font-size:13.8px;line-height:1.72}
+
+  /* ── compare table ── */
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:13px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim2);font-size:11.5px;letter-spacing:1.4px;text-transform:uppercase;font-weight:600}
+  td:first-child{color:var(--dim);width:34%}
+  .yes{color:var(--accent2)}
+  .no{color:var(--dim2)}
+  .ours{background:rgba(255,122,107,.055)}
+
+  /* ── screenshot ── */
+  .shot{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--bg2)}
+  .shot img{width:100%;display:block}
+  .shot .cap{padding:12px 16px;font-size:12.5px;color:var(--dim2);border-top:1px solid var(--line)}
+
+  /* ── steps ── */
+  .steps{counter-reset:s;display:grid;gap:16px;max-width:760px}
+  .step{display:flex;gap:16px;align-items:flex-start}
+  .step .no{flex:none;width:26px;height:26px;border-radius:50%;background:rgba(255,122,107,.13);
+    color:var(--accent);display:grid;place-items:center;font-size:12.5px;font-weight:700;
+    font-family:var(--mono);margin-top:2px}
+  .step .tx{font-size:14.6px;color:var(--dim)}
+  .step .tx b{color:var(--text);font-weight:600}
+  .step .tx code{font-family:var(--mono);font-size:13px;background:var(--bg2);
+    border:1px solid var(--line);border-radius:5px;padding:1.5px 6px;color:var(--accent2)}
+
+  /* ── notes ── */
+  .notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;
+    font-size:13.6px;color:var(--dim)}
+  .note{background:var(--bg2);border:1px solid var(--line);border-left:2px solid var(--accent);
+    border-radius:9px;padding:15px 17px}
+  .note b{color:var(--text);display:block;margin-bottom:4px;font-size:14px}
+
+  footer{padding:40px 0 60px;border-top:1px solid var(--line);color:var(--dim2);font-size:13px;
+    display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+  @media(max-width:640px){
+    header{padding:56px 0 40px}
+    .wrap{padding:0 18px}
+    section{padding:42px 0}
+    th:nth-child(3),td:nth-child(3){display:none}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">仁谱 · RENPU</div>
+  <h1>人脉的<em>谱系</em></h1>
+  <p class="lead">
+    把你的微信记录变成一张「<b>人</b>」的图谱 —— 谁是谁的人、在哪些群共现、
+    答应过什么、上次聊到哪里。<br>
+    本地优先，数据不出本机；任何 agent 都能查、能写。
+  </p>
+  <div class="cta">
+    <a class="btn-primary" href="https://github.com/jackyjinggit/renpu">★ GitHub 拉取</a>
+    <a class="btn-ghost" href="#quick">5 分钟跑起来</a>
+    <a class="btn-ghost" href="#diff">它和日报工具有什么不同</a>
+  </div>
+</header>
+</div>
+
+<div class="wrap">
+<section style="border-top:none">
+  <div class="sec-label">一眼看懂</div>
+  <h2>关系谱不是消息流</h2>
+  <p class="sec-sub">
+    消息流回答「今天要回谁」，关系谱回答「<b>他是谁的人</b>」。
+    后者只能从结构里长出来——两个人在几个群里一起出现过，就是一条边。
+  </p>
+  <div class="shot">
+    <img src="docs/landing-graph.png" alt="仁谱关系图谱示例：节点是联系人，连线粗细是共同出现的群数">
+    <div class="cap">关系图谱示例 · 节点大小 = 共现强度 · 连线粗细 = 共同出现的群数 · 全部数据在本机生成</div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-label">核心能力</div>
+  <h2>五件事</h2>
+  <div class="grid" style="margin-bottom:26px">
+    <div class="card"><span class="ic">🕸</span>
+      <h3>关系谱自动建图</h3>
+      <p>两人共同出现在 N 个群 → 一条权重 N 的边。不需要手动整理，摄取时就算出来。</p></div>
+    <div class="card"><span class="ic">👤</span>
+      <h3>一人一档</h3>
+      <p>基本档案 + 近期对话 + 所在群 + 关系边 + 待办 + 关键事件，一屏看完。</p></div>
+    <div class="card"><span class="ic">✍</span>
+      <h3>结论可写回</h3>
+      <p>agent 看完对话的判断写回 event/todo 表，每条带原话引用，可溯源。</p></div>
+    <div class="card"><span class="ic">🔌</span>
+      <h3>双入口</h3>
+      <p>CLI 给人和终端，127.0.0.1 上的 HTTP API 给 agent。--json 全结构化输出。</p></div>
+    <div class="card"><span class="ic">🔒</span>
+      <h3>数据不出本机</h3>
+      <p>库落在你自己的目录，源库全程只读。PII 入库自动脱敏，不上云。</p></div>
+    <div class="card"><span class="ic">➕</span>
+      <h3>渠道无关</h3>
+      <p>微信只是第一个 adapter。要接飞书或邮件，写一个文件即可，上层零改动。</p></div>
+  </div>
+  <pre><span class="c"># 装依赖（唯一必需项）</span>
+pip install pycryptodome
+
+<span class="c"># 零配置先体验（合成数据，不用连微信）</span>
+<span class="p">renpu</span> doctor &amp;&amp; <span class="p">renpu</span> init &amp;&amp; <span class="p">renpu</span> ingest --demo
+
+<span class="c"># 查一个人 / 看关系谱 / 出可视化</span>
+<span class="p">renpu</span> who 林夏
+<span class="p">renpu</span> edges
+<span class="p">renpu</span> graph --share        <span class="c"># 单文件 HTML，可直接发人</span></pre>
+</section>
+
+<section id="quick">
+  <div class="sec-label">快速上手</div>
+  <h2>五分钟</h2>
+  <div class="steps" style="margin-bottom:26px">
+    <div class="step"><div class="no">1</div><div class="tx"><b>装依赖</b> — <code>pip install pycryptodome</code></div></div>
+    <div class="step"><div class="no">2</div><div class="tx"><b>建库 + 灌演示数据</b> — <code>renpu init</code> 然后 <code>renpu ingest --demo</code>，全程不碰你的微信</div></div>
+    <div class="step"><div class="no">3</div><div class="tx"><b>出图看看</b> — <code>renpu graph</code>，浏览器打开一个 HTML 文件</div></div>
+    <div class="step"><div class="no">4</div><div class="tx"><b>接真微信</b> — 配置文件里写一行 <code>wc_live</code> 路径，然后 <code>renpu ingest --pull</code></div></div>
+    <div class="step"><div class="no">5</div><div class="tx"><b>接 agent</b> — <code>renpu serve</code> 起本地 API，任何 agent 通过 HTTP 调用</div></div>
+  </div>
+  <p class="sec-sub" style="margin-bottom:0">
+    详细步骤见 <a href="https://github.com/jackyjinggit/renpu/blob/main/QUICKSTART.md">QUICKSTART.md</a>，
+    接真库见 <a href="https://github.com/jackyjinggit/renpu/blob/main/INSTALL.md">INSTALL.md</a>，
+    卡住了看 <a href="https://github.com/jackyjinggit/renpu/blob/main/TROUBLESHOOT.md">TROUBLESHOOT.md</a>。
+  </p>
+</section>
+
+<section id="diff">
+  <div class="sec-label">定位</div>
+  <h2>和「微信日报工具」的区别</h2>
+  <p class="sec-sub">
+    市面上有做得不错的同类项目，它们回答「<b>今天有什么该做</b>」。
+    仁谱回答另一个问题：「<b>他是谁的人</b>」。两者不冲突，可以并存。
+  </p>
+  <table>
+    <thead><tr><th></th><th>仁谱 Renpu</th><th>情报日报类工具</th></tr></thead>
+    <tbody>
+      <tr class="ours"><td>核心对象</td><td class="yes">人（关系）</td><td class="no">消息（情报）</td></tr>
+      <tr class="ours"><td>主输出</td><td class="yes">关系谱 + 事件 + 待办</td><td class="no">日报 HTML + 商机清单</td></tr>
+      <tr class="ours"><td>查「X 是谁」</td><td class="yes">档案 + 群 + 关系边</td><td class="no">只能捞出 X 说过的话</td></tr>
+      <tr class="ours"><td>关系推理</td><td class="yes">群共现自动建图</td><td class="no">无</td></tr>
+      <tr class="ours"><td>跨渠道统一人实体</td><td class="yes">已预留（同一人多渠道合并）</td><td class="no">按会话切片</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <div class="sec-label">边界</div>
+  <h2>它不做什么</h2>
+  <div class="notes">
+    <div class="note"><b>不是云服务</b>库全程在你自己的机器上，不上传、不建账号。</div>
+    <div class="note"><b>不改你的微信</b>源库全程只读，解密快照落在仁谱自己的目录。</div>
+    <div class="note"><b>不替你判断</b>「他是什么人」的字段留给你和人工，程序不自动填。</div>
+    <div class="note"><b>不装懂</b>语音、撤回如实说「未读到」，不假装读懂了。</div>
+  </div>
+</section>
+
+<footer>
+  <div>仁谱 Renpu · AGPL-3.0-only · © 2026 蒋平 Jacky Jiang</div>
+  <div><a href="https://github.com/jackyjinggit/renpu">github.com/jackyjinggit/renpu</a></div>
+</footer>
+</div>
+
+</body>
+</html>

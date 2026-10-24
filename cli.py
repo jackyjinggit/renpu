@@ -145,6 +145,12 @@ def _pretty(o):
 
 # ─────────────────────── 命令 ───────────────────────
 
+def _data_home():
+    """数据目录（DB / 报告 / 图谱都落这里）。"""
+    import config
+    return Path(config.DATA_HOME)
+
+
 def cmd_init(a):
     core.init_db()
     print(f"✅ 仁谱库就绪：{core.DB_PATH}")
@@ -393,6 +399,34 @@ def cmd_rooms(a):
     out({"title": f"群 · {len(rows)}", "rows": rows}, a.json)
 
 
+def cmd_tour(a):
+    """一键体验：零配置走一遍，产出图谱 + 报告（不碰真实数据）。"""
+    import runpy
+    import sys as _sys
+    argv = ["tour.py"] + (["--out", a.out] if a.out else []) + (["--keep"] if a.keep else [])
+    _sys.argv = ["tour.py"] + argv[1:]
+    runpy.run_path(str(Path(__file__).parent / "scripts" / "tour.py"), run_name="__main__")
+
+
+def cmd_graph(a):
+    """生成关系图谱 HTML（自包含单文件，可直接分享）。"""
+    import render
+    con = core.connect()
+    outp = Path(a.out) if a.out else (_data_home() / "renpu-graph.html")
+    path, graph = render.write_graph_html(
+        con, outp, limit=a.limit, min_weight=a.min_weight, tier=a.tier,
+        title=a.title or "仁谱 · 关系图谱", focus=a.focus, share=a.share)
+    con.close()
+    if a.json:
+        out({"title": "关系图谱", "file": str(path),
+             "nodes": len(graph["nodes"]), "links": len(graph["links"]),
+             "rooms": len(graph["rooms"])}, True)
+    else:
+        print(f"✅ 关系图谱已生成：{path}")
+        print(f"   {len(graph['nodes'])} 人 · {len(graph['links'])} 条关系边 · {len(graph['rooms'])} 个群")
+        print("   用浏览器打开即可（单文件，可直接发给别人）")
+
+
 def main():
     ap = argparse.ArgumentParser(prog="renpu", description="仁谱 Renpu · 人脉的谱系",
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -451,6 +485,24 @@ def main():
     s.add_argument("--limit", type=int, default=40); s.set_defaults(fn=cmd_edges)
 
     s = sub.add_parser("rooms", help="群列表"); s.add_argument("--limit", type=int, default=30); s.set_defaults(fn=cmd_rooms)
+
+    s = sub.add_parser("tour", help="一键体验：零配置走一遍，产出图谱 + 报告")
+    s.add_argument("--out", help="输出目录（默认临时目录）")
+    s.add_argument("--keep", action="store_true", help="保留演示库")
+    s.set_defaults(fn=cmd_tour)
+
+    s = sub.add_parser("graph", help="生成关系图谱 HTML（单文件，可直接分享）")
+    s.add_argument("--limit", type=int, default=60, help="最多画多少人")
+    s.add_argument("--min-weight", type=float, default=1.0, dest="min_weight",
+                   help="共现强度下限（越大边越少）")
+    s.add_argument("--tier", help="只看某一层，如 AAA")
+    s.add_argument("--focus", choices=["connected", "active"],
+                   help="选人策略：connected=按关系边数（默认，推荐）/ active=按近期活跃")
+    s.add_argument("--share", action="store_true",
+                   help="分享模式：群名脱敏、隐藏消息数（可安全发给别人）")
+    s.add_argument("--out", help="输出路径（默认落在数据目录）")
+    s.add_argument("--title", help="图谱标题")
+    s.set_defaults(fn=cmd_graph)
 
     s = sub.add_parser("serve", help="起本地 HTTP API（仅 127.0.0.1）")
     s.add_argument("--port", type=int, default=int(__import__('config').DEFAULT_PORT))

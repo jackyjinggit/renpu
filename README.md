@@ -143,12 +143,16 @@ renpu serve --port 8877   # 起本地 API，任何 agent 都能调
 
 ```text
 renpu doctor                      环境自检（跑不起来先看这个）
+renpu tour                        一键体验：零配置跑一遍，出图谱 + 报告
 renpu init                        建库
 renpu ingest [--demo] [--days 90] 摄取；--demo 零配置；--pull 先解密再摄取
 renpu stats                       总览
 renpu people [-q 词] [--days N]   人列表
 renpu who <姓名>                   单人档案：档案+近期对话+群+关系谱+待办+事件
 renpu edges [--limit N]           关系谱（群共现强度）
+renpu graph [--limit N] [--focus connected|active] [--share] [--out PATH]
+                                  关系图谱 HTML（交互式，单文件，可直接分享）
+                                  --share 群名脱敏 + 隐藏消息数（可安全发人）
 renpu search <关键词>              全文检索
 renpu feed [--days N]             近期消息流
 renpu rooms [--limit N]           群列表
