@@ -439,7 +439,8 @@ def cmd_graph(a):
         print("   用浏览器打开即可（单文件，可直接发给别人）")
 
 
-def main():
+def build_parser():
+    """构造 CLI 参数解析器（独立出来，供 main / app.py / tour 复用，避免三处各写一份）。"""
     ap = argparse.ArgumentParser(prog="renpu", description="仁谱 Renpu · 人脉的谱系",
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog="""仁谱做什么：
@@ -450,8 +451,10 @@ def main():
   renpu doctor                  # 自检环境
   renpu init                    # 建库
   renpu ingest --demo           # 零配置，先体验
+  renpu tour                    # 一键体验：出图谱 + 报告
   renpu who 林夏              # 查一个人的完整档案
   renpu edges                   # 关系谱（群共现强度）
+  renpu graph --share           # 关系图谱（单文件 HTML，可直接分享）
   renpu search 黑客松            # 全文检索
   renpu serve                   # 起本地 API 给 agent
 """)
@@ -520,7 +523,11 @@ def main():
     s.add_argument("--port", type=int, default=int(__import__('config').DEFAULT_PORT))
     s.set_defaults(fn=lambda a: __import__('server').serve(a.port))
 
-    a = ap.parse_args()
+    return ap
+
+
+def dispatch(a):
+    """执行已解析的命令，并统一处理错误输出。"""
     try:
         a.fn(a)
     except SystemExit:
@@ -530,10 +537,16 @@ def main():
             traceback.print_exc()
         else:
             print(f"\n❌ {e}\n", file=sys.stderr)
-            print("💡 跑 `grm doctor` 看环境诊断。",
+            print("💡 跑 `renpu doctor` 看环境诊断。",
                   "想看 traceback 加 `--verbose` 重跑同命令。",
                   file=sys.stderr)
         sys.exit(1)
+
+
+def main(argv=None):
+    ap = build_parser()
+    a = ap.parse_args(argv)
+    dispatch(a)
 
 
 if __name__ == "__main__":

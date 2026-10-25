@@ -25,6 +25,27 @@ ACCENT2 = "#4ecdc4"
 EDGE = "#39404f"
 FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif"
 
+# 社区配色：同色=同一个圈子。顺序按「亮→暗」排，深底上都能分辨。
+# 前两位留给主强调色，后续依次轮转。
+COMMUNITY_COLORS = [
+    "#ff7a6b",  # 珊瑚
+    "#4ecdc4",  # 青
+    "#ffd166",  # 金
+    "#a78bfa",  # 紫
+    "#7dd3fc",  # 天蓝
+    "#f472b6",  # 粉
+    "#86efac",  # 浅绿
+    "#fb923c",  # 橙
+    "#c4b5fd",  # 淡紫
+    "#67e8f9",  # 亮青
+]
+
+
+def community_color(cid):
+    if cid is None:
+        return DIM
+    return COMMUNITY_COLORS[int(cid) % len(COMMUNITY_COLORS)]
+
 
 def _esc(s):
     return html.escape(str(s if s is not None else ""))
@@ -94,7 +115,7 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
     keys = [p["person_key"] for p in people]
     ph = ",".join("?" * len(keys))
     links = [dict(r) for r in con.execute(
-        f"SELECT src, dst, weight, kind FROM edge "
+        f"SELECT src, dst, weight, kind, rooms FROM edge "
         f"WHERE src IN ({ph}) AND dst IN ({ph}) AND weight >= ? "
         f"ORDER BY weight DESC", keys + keys + [min_weight]).fetchall()]
     # 去重（A→B 与 B→A 只留一条）
@@ -108,6 +129,32 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
     # 只保留两端都在节点集里的边
     kset = set(keys)
     uniq = [l for l in uniq if l["src"] in kset and l["dst"] in kset]
+
+    # 3. 社区检测：群共现天然形成社区，一眼看出「谁跟谁是一伙的」
+    import community as comm
+    room_members = comm.merge_rooms_from_links(uniq)
+    comm_by_room = comm.community_of_rooms(room_members)
+    comm_by_lp = comm.detect_communities(uniq)
+    # 群足够多时用「按群归属」（更符合直觉）；否则用标签传播（群少时更稳）
+    comm_info = comm_by_room if len(room_members) >= 3 else comm_by_lp
+    for p in people:
+        info = comm_info.get(p["person_key"])
+        if info:
+            p["community"] = info["community"]
+            p["community_size"] = info["size"]
+        else:
+            p["community"] = None
+            p["community_size"] = 0
+    # 边也带上共同群数量，用于边标签
+    for l in uniq:
+        rooms_raw = l.get("rooms")
+        cnt = 0
+        if rooms_raw:
+            try:
+                cnt = len(json.loads(rooms_raw)) if isinstance(rooms_raw, str) else len(rooms_raw)
+            except (ValueError, TypeError):
+                cnt = 0
+        l["shared_rooms"] = cnt
 
     # 房间（作为图上的分组提示）
     rooms = [dict(r) for r in con.execute(
@@ -246,15 +293,18 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   <aside>
     <h2>图例</h2>
     <div class="legend">
-      <div class="lg"><span class="dot" style="background:#ff7a6b"></span>核心圈（AAA / AAAA）</div>
-      <div class="lg"><span class="dot" style="background:#4ecdc4"></span>重要（AA）</div>
-      <div class="lg"><span class="dot" style="background:#8b93a7"></span>其他</div>
+      <div class="lg"><span class="dot" style="background:#ff7a6b"></span>圈子 1</div>
+      <div class="lg"><span class="dot" style="background:#4ecdc4"></span>圈子 2</div>
+      <div class="lg"><span class="dot" style="background:#ffd166"></span>圈子 3</div>
+      <div class="lg"><span class="dot" style="background:#a78bfa"></span>圈子 4+</div>
     </div>
     <div class="legend-note">
       <b>节点大小</b> = 共现强度<br>
-      <b>连线粗细</b> = 共同出现的群数<br><br>
-      拖动平移 · 滚轮缩放 · 悬停看详情<br>
-      点节点可放大
+      <b>连线粗细</b> = 共同出现的群数<br>
+      <b>同色</b> = 同一个圈子<br><br>
+      <b>点击某人</b> → 高亮他的关系圈，淡化无关的人<br>
+      <b>点击空白</b> → 取消聚焦<br><br>
+      拖动平移 · 滚轮缩放 · 悬停看详情
     </div>
     <h2 style="margin-top:26px">共同出现的群</h2>
     <ul class="rooms" id="rooms"></ul>
@@ -275,10 +325,12 @@ __DATA__
   // 统计条
   const deg={}; G.nodes.forEach(n=>deg[n.person_key]=0);
   G.links.forEach(l=>{deg[l.src]=(deg[l.src]||0)+1;deg[l.dst]=(deg[l.dst]||0)+1;});
+  const nComm = new Set(G.nodes.map(n=>n.community).filter(c=>c!==null&&c!==undefined)).size;
   const gstat=document.getElementById('stats');
   if(gstat) gstat.innerHTML=
     `<div class="st"><b>${G.nodes.length}<span>人</span></b></div>`+
     `<div class="st"><b>${G.links.length}<span>关系边</span></b></div>`+
+    `<div class="st"><b>${nComm}<span>圈子</span></b></div>`+
     `<div class="st"><b>${G.rooms.length}<span>共同群</span></b></div>`;
 
   // 群列表
@@ -303,7 +355,9 @@ __DATA__
     vx:0, vy:0, r:6+Math.min(deg[n.person_key]*2,12)
   }));
   const idx={}; nodes.forEach((n,i)=>idx[n.d.person_key]=i);
-  const links=G.links.map(l=>({s:idx[l.src],t:idx[l.dst],w:l.weight})).filter(l=>l.s!=null&&l.t!=null);
+  const links=G.links.map(l=>({s:idx[l.src],t:idx[l.dst],w:l.weight,
+                               shared:l.shared_rooms!=null?l.shared_rooms:null}))
+                   .filter(l=>l.s!=null&&l.t!=null);
 
   // 力导向（斥力随节点数增强，保证能摊开）
   const REPULSE = 1400 + nodes.length*38;
@@ -328,16 +382,49 @@ __DATA__
   // 绘制
   const gE=document.createElementNS(NS,'g'),gN=document.createElementNS(NS,'g'),gL=document.createElementNS(NS,'g');
   root.appendChild(gE);root.appendChild(gL);root.appendChild(gN);
+  const CC=['#ff7a6b','#4ecdc4','#ffd166','#a78bfa','#7dd3fc','#f472b6','#86efac','#fb923c','#c4b5fd','#67e8f9'];
+  const ccOf=c=>(c===null||c===undefined)?'#8b93a7':CC[Number(c)%CC.length];
+  // 邻接表（点击高亮用）
+  const nbr={}; nodes.forEach(n=>nbr[n.d.person_key]=new Set());
+  links.forEach(l=>{nbr[nodes[l.s].d.person_key].add(nodes[l.t].d.person_key);
+                     nbr[nodes[l.t].d.person_key].add(nodes[l.s].d.person_key);});
+  let focusKey=null;   // 当前聚焦的人
+
   links.forEach(l=>{const a=nodes[l.s],b=nodes[l.t];
     const ln=document.createElementNS(NS,'line');
     ln.setAttribute('stroke','#39404f');
     ln.setAttribute('stroke-width',Math.min(1+l.w*0.9,6));
-    ln.setAttribute('opacity',Math.min(0.28+l.w*0.16,0.9));
+    // 密集时压低连线透明度：核心区连线太多会糊成一片灰
+    ln.setAttribute('opacity',DENSE?0.18:Math.min(0.28+l.w*0.16,0.9));
     gE.appendChild(ln);l.el=ln;});
+
+  // 边标签：共同出现的群数。
+  // 只给权重最高的若干条边显示，否则中心区会挤成一团「5群5群5群」。
+  const gT=document.createElementNS(NS,'g');
+  root.appendChild(gT);
+  const labelBudget = DENSE ? 26 : 60;
+  const ranked = links.slice().sort((a,b)=>b.w-a.w);
+  const labelSet = new Set(ranked.slice(0,labelBudget).map(l=>l));
+  links.forEach(l=>{
+    if(!labelSet.has(l)) { l.lbl=null; return; }
+    const t=document.createElementNS(NS,'text');
+    t.setAttribute('fill','#c8cedd');t.setAttribute('font-size','9.5');
+    t.setAttribute('text-anchor','middle');t.setAttribute('font-family',FONT);
+    t.setAttribute('paint-order','stroke');           // 加描边，压在连线上也看得清
+    t.setAttribute('stroke','#0f1115');t.setAttribute('stroke-width','3');
+    t.setAttribute('stroke-linejoin','round');
+    t.textContent = l.shared!=null && l.shared>0 ? `${l.shared}群` : `${Math.round(l.w)}`;
+    t.style.pointerEvents='none';
+    gT.appendChild(t);l.lbl=t;
+  });
+
   nodes.forEach(n=>{
     const c=document.createElementNS(NS,'circle');
     const t=(n.d.tier||'').toUpperCase();
-    c.setAttribute('fill',(t==='AAA'||t==='AAAA')?'#ff7a6b':t==='AA'?'#4ecdc4':'#8b93a7');
+    // 有社区时按社区着色（更能看出圈子）；否则回落到分层配色
+    const comm=n.d.community;
+    c.setAttribute('fill', (comm!==null&&comm!==undefined) ? ccOf(comm)
+                    : (t==='AAA'||t==='AAAA')?'#ff7a6b':t==='AA'?'#4ecdc4':'#8b93a7');
     c.setAttribute('r',n.r);c.setAttribute('opacity','.92');
     c.style.cursor='pointer';
     c.__n=n;
@@ -356,18 +443,81 @@ __DATA__
       tip.style.left=(ev.clientX-r.left+14)+'px';
       tip.style.top=(ev.clientY-r.top+14)+'px';
       const d=n.d;const tags=(d.tier?d.tier+' · ':'')+(d.circle||'');
+      const commTxt = (d.community!==null&&d.community!==undefined)
+          ? `<br>圈子 ${d.community+1}（${d.community_size||0} 人）` : '';
       tip.innerHTML=`<div class="tipname">${d.display_name}</div>`+
-        `<div class="tipmeta">${tags}<br>消息 ${d.msg_total||0} 条`+
+        `<div class="tipmeta">${tags}${commTxt}<br>消息 ${d.msg_total||0} 条`+
         (d.role?` · ${d.role}`:'')+`</div>`;
     });
     c.addEventListener('mouseleave',()=>tip.style.display='none');
-    c.addEventListener('click',()=>{n.r+=3;c.setAttribute('r',n.r);});
+    c.addEventListener('click',ev=>{
+      ev.stopPropagation();
+      const k=n.d.person_key;
+      focusKey = (focusKey===k) ? null : k;   // 再点一次取消
+      applyFocus();
+    });
   });
+
+  // 点击聚焦：高亮该人的关系圈，淡化无关节点
+  function applyFocus(){
+    if(!focusKey){
+      nodes.forEach(n=>{n.el.setAttribute('opacity','.92');n.el.setAttribute('stroke','none');
+                         n.tx.style.opacity='1';});
+      links.forEach(l=>{l.el.setAttribute('opacity',Math.min(0.28+l.w*0.16,0.9));
+                         l.el.setAttribute('stroke','#39404f');
+                         if(l.lbl)l.lbl.style.opacity='1';});
+      return;
+    }
+    const near=nbr[focusKey]||new Set();
+    nodes.forEach(n=>{
+      const k=n.d.person_key;
+      const isF=(k===focusKey), isN=near.has(k);
+      n.el.setAttribute('opacity', (isF||isN)?'.95':'.12');
+      n.el.setAttribute('stroke', isF?'#ffffff':'none');
+      n.el.setAttribute('stroke-width', isF?'2.5':'0');
+      n.tx.style.opacity=(isF||isN)?'1':'.12';
+    });
+    links.forEach(l=>{
+      const s=nodes[l.s].d.person_key, t2=nodes[l.t].d.person_key;
+      const touch=(s===focusKey||t2===focusKey);
+      l.el.setAttribute('opacity', touch?'.95':'.05');
+      l.el.setAttribute('stroke', touch?'#ff7a6b':'#39404f');
+      if(l.lbl) l.lbl.style.opacity= touch?'1':'0';
+    });
+  }
+  svg.addEventListener('click',()=>{ if(focusKey){focusKey=null;applyFocus();} });
+
   function paint(){nodes.forEach(n=>{n.el.setAttribute('cx',n.x);n.el.setAttribute('cy',n.y);
     n.tx.setAttribute('x',n.x);n.tx.setAttribute('y',n.y+n.r+14);
     n.tx.style.display=(labelMode==='none'||(labelMode==='auto'&&n.labelHidden))?'none':'';});
     links.forEach(l=>{l.el.setAttribute('x1',nodes[l.s].x);l.el.setAttribute('y1',nodes[l.s].y);
-      l.el.setAttribute('x2',nodes[l.t].x);l.el.setAttribute('y2',nodes[l.t].y);});}
+      l.el.setAttribute('x2',nodes[l.t].x);l.el.setAttribute('y2',nodes[l.t].y);
+      if(l.lbl){const a=nodes[l.s],b=nodes[l.t];
+        l.lbl.setAttribute('x',(a.x+b.x)/2);l.lbl.setAttribute('y',(a.y+b.y)/2-3);}});
+    resolveLabelOverlap();}
+
+  // 节点标签碰撞规避：重叠的直接隐藏（优先保留关系度高的）
+  // 用真实 getBBox 测量——中文按字符数估算宽度会偏小，导致漏判重叠
+  function resolveLabelOverlap(){
+    const shown=nodes.filter(n=>n.tx.style.display!=='none')
+                     .sort((a,b)=>deg[b.d.person_key]-deg[a.d.person_key]);
+    const placed=[];
+    for(const n of shown){
+      // getBBox 对 display:none 元素返回空盒，测量前先临时置为可见
+      const prev=n.tx.style.display;
+      n.tx.style.display='';
+      let box;
+      try{ box=n.tx.getBBox(); }catch(e){ box={x:n.x-30,y:n.y-10,width:60,height:14}; }
+      if(!box.width){ box={x:n.x-30,y:n.y-10,width:60,height:14}; }
+      let hit=false;
+      for(const p of placed){
+        if(box.x < p.x+p.w && box.x+box.width > p.x
+           && box.y < p.y+p.h && box.y+box.height > p.y){hit=true;break;}
+      }
+      if(hit){n.tx.style.display='none';}
+      else placed.push({x:box.x,y:box.y,w:box.width,h:box.height});
+    }
+  }
 
   // 缩放到内容边界 —— 关键：让图撑满画布而不是挤在中间
   let view={s:1,tx:0,ty:0};
@@ -429,6 +579,7 @@ __DATA__
   window.toggleLabels=function(){
     labelMode = labelMode==='auto' ? 'all' : (labelMode==='all' ? 'none' : 'auto');
     nodes.forEach(n=>{n.tx.style.display=(labelMode==='none'||(labelMode==='auto'&&n.labelHidden))?'none':'';});
+    if(labelMode!=='auto') resolveLabelOverlap();
     const btn=document.querySelector('.toolbar button:nth-child(2)');
     if(btn) btn.textContent = labelMode==='auto'?'显示全部标签' : (labelMode==='all'?'隐藏全部标签':'标签：自动');
   };

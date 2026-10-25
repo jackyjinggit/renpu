@@ -215,11 +215,24 @@ def add_event(con, person_key, kind, ts, title=None, detail=None, evidence=None,
 
 
 def add_edge(con, src, dst, kind, weight=1.0, rooms=None, note=None):
+    """写入/累加一条关系边。
+
+    rooms 是「共同出现的群」列表。累加时必须**合并去重**而不是覆盖——
+    否则会出现 weight=3 但 rooms 只剩最后一个群的数据不一致
+    （权重说 3 个群，群列表却只列 1 个，下游标签会误导人）。
+    """
+    incoming = json.dumps(rooms or [], ensure_ascii=False)
     con.execute(
         "INSERT INTO edge(src,dst,kind,weight,rooms,note,updated_at) VALUES(?,?,?,?,?,?,?) "
-        "ON CONFLICT(src,dst,kind) DO UPDATE SET weight=edge.weight+excluded.weight, "
-        "rooms=excluded.rooms, updated_at=excluded.updated_at",
-        (src, dst, kind, weight, json.dumps(rooms or [], ensure_ascii=False), note, now()),
+        "ON CONFLICT(src,dst,kind) DO UPDATE SET "
+        "  weight=edge.weight+excluded.weight, "
+        "  rooms=(SELECT json_group_array(value) FROM ("
+        "          SELECT value FROM json_each(edge.rooms) "
+        "          UNION "
+        "          SELECT value FROM json_each(excluded.rooms)"
+        "        )), "
+        "  updated_at=excluded.updated_at",
+        (src, dst, kind, weight, incoming, note, now()),
     )
 
 

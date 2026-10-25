@@ -24,8 +24,13 @@ APP_VERSION = "0.3.0"
 
 
 def app_root() -> Path:
+    """应用代码根目录。
+
+    单文件 EXE：运行时被解压到临时目录，资源（schema / adapters / scripts）
+    在那儿；数据目录则另算（用户级 %LOCALAPPDATA%\\renpu）。
+    """
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
     return Path(__file__).resolve().parent
 
 
@@ -113,28 +118,72 @@ class RenpuDesktop(tk.Tk):
         return sys.executable
 
     def _cli(self, *args):
+        """构造 CLI 调用方式。
+
+        冻结（单文件 EXE）时不能再找 sibling 可执行文件——单文件里没有 sibling。
+        改为进程内调用：单文件每次启动都要解压运行时，fork 子进程会慢到不可用。
+        """
         if getattr(sys, "frozen", False):
-            # portable 发布包同时携带 renpu-cli.exe；GUI 进程不冒充 Python 解释器
-            cli_exe = app_root() / "renpu-cli.exe"
-            return [str(cli_exe), *args]
+            return None  # 标记：走进程内
         return [self._python(), str(app_root() / "cli.py"), *args]
+
+    def _run_cli(self, args, env=None, quiet=True):
+        """执行一条 CLI 命令，返回 (ok, stdout)。"""
+        import contextlib
+        import io
+        cmd = self._cli(*args)
+        buf = io.StringIO()
+        saved = {}
+        if env:
+            for k in ("RENPU_DATA_HOME", "RENPU_DB_PATH", "RENPU_LOG_DIR", "RENPU_EXPORT_DIR"):
+                saved[k] = os.environ.get(k)
+                if k in env:
+                    os.environ[k] = env[k]
+        try:
+            if cmd is None:
+                import cli as cli_mod
+                ns = cli_mod.build_parser().parse_args(list(args))
+                if quiet:
+                    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                        cli_mod.dispatch(ns)
+                else:
+                    cli_mod.dispatch(ns)
+            else:
+                import subprocess
+                r = subprocess.run(cmd, cwd=str(app_root()),
+                                   env={**os.environ, **(env or {})},
+                                   capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace")
+                if r.returncode != 0:
+                    return False, (r.stderr or r.stdout)
+                return True, r.stdout
+        except SystemExit as e:
+            return False, buf.getvalue()
+        except Exception as e:
+            return False, str(e)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        return True, buf.getvalue()
 
     def run_demo(self):
         def work():
             try:
                 self.demo_dir.mkdir(parents=True, exist_ok=True)
-                env = os.environ.copy()
-                env.update({
+                env = {
                     "RENPU_DATA_HOME": str(self.demo_dir),
                     "RENPU_DB_PATH": str(self.demo_dir / "renpu.db"),
                     "RENPU_LOG_DIR": str(self.demo_dir / "logs"),
                     "RENPU_EXPORT_DIR": str(self.demo_dir / "exports"),
                     "PYTHONIOENCODING": "utf-8",
-                })
+                }
                 self.status_var.set("正在创建隔离演示库……")
-                subprocess.run(self._cli("tour", "--out", str(self.demo_dir)),
-                               cwd=str(app_root()), env=env,
-                               capture_output=True, check=True)
+                ok, detail = self._run_cli(["tour", "--out", str(self.demo_dir)], env=env)
+                if not ok:
+                    raise RuntimeError(detail or "未知错误")
                 self.after(0, lambda: self.status_var.set(
                     f"演示已就绪：{self.demo_dir} · 可打开关系图谱或体验报告"))
                 self.after(0, self.open_graph)

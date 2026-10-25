@@ -110,6 +110,12 @@ renpu serve --port 8877   # 起本地 API，任何 agent 都能调
 **关系谱（edge）怎么来的**：两个联系人同时出现在 N 个群里 → 建立一条权重 N 的边。
 不需要任何人手动录入，摄取时自动算出来。
 
+**社区（圈子）怎么来的**：群共现天然形成社区。仁谱从 `room_member` 反推共同群，
+把「主要群相同的人」归为一个圈子，图上同色 = 同一个圈子，一眼看出谁跟谁是一伙的。
+
+**边上标的「N 群」**：这条关系共同出现在几个群里。数据来自 `edge.rooms`，
+由 `room_member` 全量事实反推，保证和权重一致（不会出现「权重说 3 个群、列表只列 1 个」）。
+
 ---
 
 ## 数据落在哪
@@ -150,6 +156,9 @@ renpu stats                       总览
 renpu people [-q 词] [--days N]   人列表
 renpu who <姓名>                   单人档案：档案+近期对话+群+关系谱+待办+事件
 renpu edges [--limit N]           关系谱（群共现强度）
+renpu graph [--limit N] [--focus connected|active] [--share]
+                              关系图谱 HTML：交互式、单文件、零依赖
+                              同色=同一圈子 · 边上标共同群数 · 点击某人高亮其关系圈
 renpu graph [--limit N] [--focus connected|active] [--share] [--out PATH]
                                   关系图谱 HTML（交互式，单文件，可直接分享）
                                   --share 群名脱敏 + 隐藏消息数（可安全发人）

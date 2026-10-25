@@ -44,6 +44,63 @@ def info(text):
     print(f"  {DIM}{text}{RESET}")
 
 
+def _run_inprocess(args, env, quiet=False):
+    """在当前进程内执行一条 CLI 命令（单文件 EXE 专用，避免重复解压运行时）。
+
+    做法：临时把环境变量切到目标目录 → 调用 cli 的分派逻辑 → 还原。
+    不走 argparse 顶层，避免和 tour 自己的参数解析打架。
+    """
+    import io
+    import contextlib
+
+    saved = {k: os.environ.get(k) for k in
+             ("RENPU_DATA_HOME", "RENPU_DB_PATH", "RENPU_LOG_DIR", "RENPU_EXPORT_DIR")}
+    os.environ.update({k: env[k] for k in saved if k in env})
+
+    buf = io.StringIO()
+    code = 0
+    try:
+        import cli
+        ns = _build_namespace(cli, args)
+        if ns is None:
+            return ""
+        if quiet:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                cli.dispatch(ns)
+        else:
+            cli.dispatch(ns)
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else 1
+    except Exception as e:
+        print(f"  {RED}✗{RESET} {args[0] if args else '命令'} 失败")
+        print(f"  {DIM}{e}{RESET}")
+        code = 1
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    if code:
+        print(f"  {RED}✗{RESET} {args[0] if args else '命令'} 失败")
+        raise SystemExit(code)
+    if not quiet:
+        for line in buf.getvalue().splitlines():
+            if line.strip():
+                print(f"  {DIM}{line}{RESET}")
+    return buf.getvalue()
+
+
+def _build_namespace(cli, args):
+    """用 cli 自己的 parser 解析参数，拿到可 dispatch 的 namespace。"""
+    parser = cli.build_parser()
+    try:
+        return parser.parse_args(args)
+    except SystemExit:
+        return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="仁谱一键体验")
     ap.add_argument("--out", help="输出目录（默认临时目录）")
@@ -69,35 +126,24 @@ def main():
     py = sys.executable
 
     def run(args, quiet=False):
+        """执行一个 CLI 命令。
+
+        单文件 EXE 每次启动都要把运行时解压到临时目录，fork 子进程会慢到
+        不可用；所以冻结模式下改为**进程内直接调用**（同进程内切好环境变量）。
+        """
+        clean_args = list(args)
+        if clean_args and str(clean_args[0]).lower().endswith("cli.py"):
+            clean_args = clean_args[1:]
+
         if getattr(sys, "frozen", False):
-            # PyInstaller may expose sys.executable as an internal script path;
-            # argv[0] remains the actual portable console executable.
-            forced = os.environ.get("RENPU_CLI_FROZEN_EXE")
-            raw = Path(sys.argv[0])
-            if forced and Path(forced).exists():
-                frozen_cli = Path(forced)
-            elif raw.suffix.lower() == ".exe":
-                frozen_cli = raw
-            else:
-                # one-dir PyInstaller: __file__/sys.executable may point to
-                # <bundle>/_internal/cli.py; the runnable sibling is two levels up.
-                candidate = Path(sys.executable).parent.parent / "renpu-cli.exe"
-                frozen_cli = candidate if candidate.exists() else Path(sys.executable)
-            # tour 在源码模式传入 [cli.py, command...]；冻结模式只需 command。
-            clean_args = list(args)
-            if clean_args and str(clean_args[0]).lower().endswith("cli.py"):
-                clean_args = clean_args[1:]
-            command = [str(frozen_cli), *clean_args]
-        else:
-            clean_args = list(args)
-            if clean_args and str(clean_args[0]).lower().endswith("cli.py"):
-                clean_args = clean_args[1:]
-            command = [py, str(ROOT / "cli.py"), *clean_args]
+            return _run_inprocess(clean_args, env, quiet)
+
+        command = [py, str(ROOT / "cli.py"), *clean_args]
         r = subprocess.run(command, cwd=str(ROOT), env=env,
                            capture_output=True, text=True,
                            encoding="utf-8", errors="replace")
         if r.returncode != 0:
-            print(f"  {RED}✗{RESET} {args[0]} 失败")
+            print(f"  {RED}✗{RESET} {clean_args[0] if clean_args else args[0]} 失败")
             print(f"  {DIM}{(r.stderr or r.stdout)[-400:]}{RESET}")
             raise SystemExit(1)
         if not quiet:
