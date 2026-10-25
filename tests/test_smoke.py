@@ -186,6 +186,38 @@ def main():
     assert "demo" in demo_home.parts, f"demo 库不在独立子目录：{demo_home}"
     print(f"  ✅ demo 库隔离：{demo_home.parent.name}/（真实库位 {real_slot.name} 独立）")
 
+    # 8b3. PII 遮蔽：wxid / 手机 / 邮箱 / QQ / 微信号 都必须遮，
+    #      同时不能误伤普通英文（误伤会让正常消息看起来被审查过）
+    import core as core_mod
+    must_hide = [
+        ("wxid_aaaa1111bbbb2222: 内容", "微信id"),
+        ("手机 13812345678", "手机"),
+        ("邮箱 zhangsan@example.com", "邮箱"),
+        ("QQ 12345678", "QQ号"),
+        ("微信号 zhangsan_2024", "微信号"),
+        ("公众号 gh_abcdef123456", "公众号id"),
+    ]
+    for txt, tag in must_hide:
+        out, hit = core_mod.mask_pii(txt)
+        assert hit, f"PII 没遮住（{tag}）：{txt} → {out}"
+        assert tag in out, f"遮蔽标记不对（{tag}）：{out}"
+    # 关键回归点：Python 的  只认 ASCII 词字符，
+    # 「wxid_xxx退群了」里 wxid 后直接跟中文 → 无边界 → 旧正则漏遮。
+    # 必须用负向前瞻而不是 。
+    for txt in ("wxid_cccc3333dddd4444退群了，祝他早日财富自由",
+                "[微信id]: wxid_eeee5555ffff6666退群了",
+                "邮箱 zhangsan@example.com 收到"):
+        out, hit = core_mod.mask_pii(txt)
+        assert hit, f"中文紧跟时没遮住：{txt} → {out}"
+        assert "wxid_" not in out and "@" not in out.replace("[邮箱]", ""),             f"中文紧跟时漏遮：{txt} → {out}"
+    must_keep = ["正常一句话没有敏感信息", "2026年10月26日", "版本号 v1.2.3",
+                 "会议室 3021", "see you at the office", "hello_world",
+                 "@全体 记得看", "请直接@我"]
+    for txt in must_keep:
+        out, hit = core_mod.mask_pii(txt)
+        assert not hit, f"误伤正常文本：{txt} → {out}"
+    print(f"  ✅ PII 遮蔽：{len(must_hide)} 类遮住 / {len(must_keep)} 条不误伤")
+
     # 8c. demo 库 room_key 口径一致：edge.rooms 的群 key 必须能在 room 表里找到
     room_keys = set(r[0] for r in con.execute("SELECT room_key FROM room"))
     edge_rooms = set()
