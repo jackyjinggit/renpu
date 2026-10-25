@@ -439,6 +439,25 @@ def cmd_graph(a):
         print("   用浏览器打开即可（单文件，可直接发给别人）")
 
 
+def cmd_graph3d(a):
+    """生成 3D 关系圈聚光 HTML（单文件，可直接分享）。"""
+    import render3d
+    con = core.connect()
+    outp = Path(a.out) if a.out else (_data_home() / "renpu-graph3d.html")
+    path, g = render3d.write_graph_3d(
+        con, outp, center_key=a.person, limit=a.limit, share=a.share)
+    center = next((n for n in g["nodes"] if n.get("is_center")), None)
+    con.close()
+    who = center["display_name"] if center else "(未知)"
+    if a.json:
+        out({"title": "3D 关系圈", "file": str(path), "center": who,
+             "nodes": len(g["nodes"]), "links": len(g["links"])}, True)
+    else:
+        print(f"✅ 3D 关系圈已生成：{path}")
+        print(f"   中心：{who} · {len(g['nodes'])} 人 · {len(g['links'])} 条关系边")
+        print("   用浏览器打开即可（单文件，可直接发给别人）")
+
+
 def build_parser():
     """构造 CLI 参数解析器（独立出来，供 main / app.py / tour 复用，避免三处各写一份）。"""
     ap = argparse.ArgumentParser(prog="renpu", description="仁谱 Renpu · 人脉的谱系",
@@ -518,6 +537,14 @@ def build_parser():
     s.add_argument("--out", help="输出路径（默认落在数据目录）")
     s.add_argument("--title", help="图谱标题")
     s.set_defaults(fn=cmd_graph)
+
+    s = sub.add_parser("graph3d", help="生成 3D 关系圈聚光 HTML（聚焦某人的关系结构）")
+    s.add_argument("--person", help="中心人物的名字或 person_key（默认自动选关系最多的人）")
+    s.add_argument("--limit", type=int, default=36, help="最多放多少人进球面（默认 36）")
+    s.add_argument("--share", action="store_true",
+                   help="分享模式：群名脱敏、隐藏消息数（可安全发给别人）")
+    s.add_argument("--out", help="输出路径（默认落在数据目录）")
+    s.set_defaults(fn=cmd_graph3d)
 
     s = sub.add_parser("serve", help="起本地 HTTP API（仅 127.0.0.1）")
     s.add_argument("--port", type=int, default=int(__import__('config').DEFAULT_PORT))

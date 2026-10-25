@@ -116,6 +116,15 @@ renpu serve --port 8877   # 起本地 API，任何 agent 都能调
 **边上标的「N 群」**：这条关系共同出现在几个群里。数据来自 `edge.rooms`，
 由 `room_member` 全量事实反推，保证和权重一致（不会出现「权重说 3 个群、列表只列 1 个」）。
 
+**时间轴怎么来的**：`person.first_seen`（首次进入你人脉的时间）由 `msg_index` 与
+`room_member` 双源反推回填，覆盖全库 68%。图上拖动滑块 = 拖动时间，
+只看当时已经进入你人脉的人，看圈子怎么一步步长出来。
+
+**3D 关系圈**：点某人 → 以他为中心，把关系圈摆成球面（越靠中心 = 关系越强）。
+用 SVG 手写透视投影 + 画家算法，零第三方依赖。
+不用 CSS 3D transform —— 它没有真正的 3D 渲染管线，实测 886 条边里 884 条
+横穿侧边栏、节点被拉成斜线阵列、UI 层被吃掉。
+
 ---
 
 ## 数据落在哪
@@ -159,6 +168,10 @@ renpu edges [--limit N]           关系谱（群共现强度）
 renpu graph [--limit N] [--focus connected|active] [--share]
                               关系图谱 HTML：交互式、单文件、零依赖
                               同色=同一圈子 · 边上标共同群数 · 点击某人高亮其关系圈
+                              底部时间轴：拖动看圈子随时间扩张
+renpu graph3d [--person 名字] [--limit N] [--share]
+                              3D 关系圈 HTML：聚焦某人的关系结构
+                              球面布局（越靠中心=关系越强）· 手写透视投影 · 零依赖
 renpu graph [--limit N] [--focus connected|active] [--share] [--out PATH]
                                   关系图谱 HTML（交互式，单文件，可直接分享）
                                   --share 群名脱敏 + 隐藏消息数（可安全发人）

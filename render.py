@@ -145,6 +145,22 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
         else:
             p["community"] = None
             p["community_size"] = 0
+
+    # 3b. 时间维度：首次进入时间（用于时间轴滑块）
+    fs = {}
+    if keys:
+        ph2 = ",".join("?" * len(keys))
+        for r in con.execute(
+                f"SELECT person_key, first_seen FROM person "
+                f"WHERE person_key IN ({ph2}) AND first_seen > 0", keys).fetchall():
+            fs[r[0]] = r[1]
+    tmin = min(fs.values()) if fs else None
+    tmax = max(fs.values()) if fs else None
+    for p in people:
+        t = fs.get(p["person_key"])
+        p["first_ts"] = t
+        p["t_norm"] = round((t - tmin) / max((tmax - tmin), 1), 4) if (t and tmin is not None) else None
+
     # 边也带上共同群数量，用于边标签
     for l in uniq:
         rooms_raw = l.get("rooms")
@@ -167,7 +183,9 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
     if share:
         for r in rooms:
             r["name"] = "群（已脱敏）"
-    return {"nodes": people, "links": uniq, "rooms": rooms}
+    return {"nodes": people, "links": uniq, "rooms": rooms,
+            "time_axis": {"enabled": bool(fs), "min": tmin, "max": tmax,
+                          "count": len(fs)}}
 
 
 def render_html(graph, title="仁谱 · 关系图谱", subtitle="", embed_data=True):
@@ -235,9 +253,10 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   header{padding:22px 26px 12px;border-bottom:1px solid var(--line);}
   h1{margin:0 0 6px;font-size:19px;font-weight:650;letter-spacing:.3px}
   .sub{color:var(--dim);font-size:13px}
-  .wrap{display:grid;grid-template-columns:1fr 300px;gap:0;height:calc(100vh - 92px)}
+  .wrap{display:grid;grid-template-columns:1fr 300px;gap:0;height:calc(100vh - 108px);
+     min-height:0}
   @media(max-width:900px){.wrap{grid-template-columns:1fr;height:auto}}
-  #stage{position:relative;overflow:hidden}
+  #stage{position:relative;overflow:hidden;min-height:0}
   svg{width:100%;height:100%;display:block;cursor:grab}
   svg:active{cursor:grabbing}
   aside{background:var(--panel);border-left:1px solid var(--line);padding:18px;overflow:auto}
@@ -273,6 +292,24 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   .legend-note{border-top:1px solid var(--line);padding-top:16px;margin-top:18px;
      font-size:11.5px;color:var(--dim);line-height:1.85}
   .legend-note b{color:var(--text);font-weight:500}
+  /* 时间轴 */
+  .timebar{position:absolute;left:50%;transform:translateX(-50%);bottom:16px;z-index:12;
+     background:rgba(23,26,33,.96);border:1px solid var(--line);border-radius:10px;
+     padding:11px 16px 13px;min-width:430px;max-width:78vw;
+     box-shadow:0 8px 28px rgba(0,0,0,.45)}
+  .timebar .row{display:flex;align-items:center;gap:12px}
+  .timebar .lab{font-size:11px;color:var(--dim);white-space:nowrap}
+  .timebar .val{font-size:12px;color:var(--text);font-variant-numeric:tabular-nums;
+     white-space:nowrap;min-width:76px}
+  input[type=range]{-webkit-appearance:none;appearance:none;flex:1;height:4px;border-radius:2px;
+     background:linear-gradient(90deg,#4ecdc4 var(--p,100%),#2a3040 var(--p,100%));outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+     width:15px;height:15px;border-radius:50%;background:#ff7a6b;cursor:pointer;
+     border:2px solid #0f1115;box-shadow:0 0 8px rgba(255,122,107,.6)}
+  .timebar .hint{font-size:10.5px;color:var(--dim);margin-top:7px;line-height:1.5}
+  .tbtn{background:transparent;border:1px solid var(--line);color:var(--dim);
+     border-radius:6px;padding:3px 9px;font-size:11px;cursor:pointer;font-family:inherit}
+  .tbtn:hover{border-color:var(--accent);color:var(--accent)}
 </style>
 </head>
 <body>
@@ -286,6 +323,16 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="toolbar">
       <button onclick="restart()">重新布局</button>
       <button onclick="toggleLabels()">显示全部标签</button>
+      <button id="btn3d" onclick="make3d()" style="display:none">生成 3D 圈</button>
+    </div>
+    <div class="timebar" id="timebar" style="display:none">
+      <div class="row">
+        <span class="lab">时间轴</span>
+        <input type="range" id="tslider" min="0" max="1000" value="1000" oninput="onTime(this.value)">
+        <span class="val" id="tval"></span>
+        <button class="tbtn" onclick="resetTime()">全部</button>
+      </div>
+      <div class="hint" id="thint">拖动查看圈子随时间扩张 —— 只显示当时已进入你人脉的人</div>
     </div>
     <svg id="svg"></svg>
     <div class="tip" id="tip"></div>
@@ -321,9 +368,14 @@ __DATA__
   const NS='http://www.w3.org/2000/svg';
   const FONT="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif";
   let labelMode='auto';   // auto | all | none
+  let timeRelaxed=false;    // 时间过滤后候选集变小 → 放开密度压制
 
   // 统计条
   const deg={}; G.nodes.forEach(n=>deg[n.person_key]=0);
+  // 时间轴状态提前声明（paint() 在初始化末尾会调用 applyFocus，
+  // 若 TA/时间轴变量在使用后才声明会触发 TDZ 报错）
+  const TA = G.time_axis || {enabled:false};
+  let timeCut = 1.0;
   G.links.forEach(l=>{deg[l.src]=(deg[l.src]||0)+1;deg[l.dst]=(deg[l.dst]||0)+1;});
   const nComm = new Set(G.nodes.map(n=>n.community).filter(c=>c!==null&&c!==undefined)).size;
   const gstat=document.getElementById('stats');
@@ -362,17 +414,21 @@ __DATA__
   // 力导向（斥力随节点数增强，保证能摊开）
   const REPULSE = 1400 + nodes.length*38;
   function tick(){
-    for(let i=0;i<nodes.length;i++){const a=nodes[i];
-      for(let j=i+1;j<nodes.length;j++){const b=nodes[j];
+    // 时间过滤时，被排除的节点不参与布局（否则它们会把可见节点顶开、占位）
+    const filtering = (TA.enabled && timeCut<0.999);
+    const act = filtering ? nodes.filter(n=>!n.timeHidden) : nodes;
+    for(let i=0;i<act.length;i++){const a=act[i];
+      for(let j=i+1;j<act.length;j++){const b=act[j];
         let dx=b.x-a.x,dy=b.y-a.y;let d2=dx*dx+dy*dy||1;
         if(d2<98000){const f=REPULSE/d2;const d=Math.sqrt(d2);
           const ux=dx/d,uy=dy/d;a.vx-=ux*f;a.vy-=uy*f;b.vx+=ux*f;b.vy+=uy*f;}}}
     links.forEach(l=>{const a=nodes[l.s],b=nodes[l.t];
+      if(filtering && (a.timeHidden||b.timeHidden)) return;  // 隐藏边的两端不参与
       let dx=b.x-a.x,dy=b.y-a.y;let d=Math.sqrt(dx*dx+dy*dy)||1;
       // 目标距离随共同群数增加（关系越强靠得越近）
       const target=70+ (4-Math.min(l.w,4))*26;const f=(d-target)*0.016*Math.min(l.w,4);
       const ux=dx/d,uy=dy/d;a.vx+=ux*f;a.vy+=uy*f;b.vx-=ux*f;b.vy-=uy*f;});
-    nodes.forEach(a=>{a.vx+=(W/2-a.x)*0.0022;a.vy+=(H/2-a.y)*0.0022;
+    act.forEach(a=>{a.vx+=(W/2-a.x)*0.0022;a.vy+=(H/2-a.y)*0.0022;
       a.vx*=0.85;a.vy*=0.85;a.x+=a.vx;a.y+=a.vy;});
   }
   // 迭代次数随节点数增加（稀疏图需要更多轮才聚拢）
@@ -408,6 +464,7 @@ __DATA__
   links.forEach(l=>{
     if(!labelSet.has(l)) { l.lbl=null; return; }
     const t=document.createElementNS(NS,'text');
+    t.setAttribute('class','elabel');
     t.setAttribute('fill','#c8cedd');t.setAttribute('font-size','9.5');
     t.setAttribute('text-anchor','middle');t.setAttribute('font-family',FONT);
     t.setAttribute('paint-order','stroke');           // 加描边，压在连线上也看得清
@@ -430,7 +487,18 @@ __DATA__
     c.__n=n;
     gN.appendChild(c);n.el=c;
     const tx=document.createElementNS(NS,'text');
-    tx.setAttribute('fill','#e8eaf0');tx.setAttribute('font-size',DENSE?'10':'12');
+    tx.setAttribute('class','nlabel');
+    // 字号按名字长度自适应：微信昵称可能很长（还带 emoji），
+    // 固定字号会让长名糊成一团 —— 宁可缩小，也要看清是谁
+    const nm=String(n.d.display_name||'');
+    const nmLen=[...nm].length;           // 按码点算，emoji 占 1
+    const baseFs=DENSE?10:12;
+    const fs = nmLen>16 ? 8 : (nmLen>11 ? 9 : baseFs);
+    tx.setAttribute('fill','#e8eaf0');tx.setAttribute('font-size',fs);
+    // 加深色描边：即使与其他标签轻微交叠，也能读清（排版层兜底，不依赖避让时序）
+    tx.setAttribute('paint-order','stroke');
+    tx.setAttribute('stroke','#0f1115');tx.setAttribute('stroke-width','3.5');
+    tx.setAttribute('stroke-linejoin','round');
     tx.setAttribute('text-anchor','middle');tx.setAttribute('font-family',FONT);
     tx.setAttribute('y',n.r+14);tx.textContent=n.d.display_name;
     // 密集时低关系度节点先不显示标签（hover 仍可看）
@@ -455,68 +523,156 @@ __DATA__
       const k=n.d.person_key;
       focusKey = (focusKey===k) ? null : k;   // 再点一次取消
       applyFocus();
+      sync3dButton();
     });
   });
 
   // 点击聚焦：高亮该人的关系圈，淡化无关节点
+  // 与时间轴叠加：焦点优先，其次时间过滤（被时间排除的一律保持淡化）
   function applyFocus(){
+    const timeOn = (typeof TA!=='undefined') && TA.enabled;
     if(!focusKey){
-      nodes.forEach(n=>{n.el.setAttribute('opacity','.92');n.el.setAttribute('stroke','none');
-                         n.tx.style.opacity='1';});
-      links.forEach(l=>{l.el.setAttribute('opacity',Math.min(0.28+l.w*0.16,0.9));
-                         l.el.setAttribute('stroke','#39404f');
-                         if(l.lbl)l.lbl.style.opacity='1';});
-      return;
+    nodes.forEach(n=>{
+      const hidden = timeOn && n.timeHidden;
+      // 时间排除的节点完全隐藏（淡出态会占位并干扰聚焦感）
+      n.el.setAttribute('opacity', hidden ? '0' : (n.el.getAttribute('data-op')||'.92'));
+      n.el.setAttribute('stroke','none');
+      n.tx.style.display = (hidden || !labelCandidate(n)
+        || (labelMode==='auto'&&n.overlapHidden)) ? 'none' : '';
+      n.tx.style.opacity = '1';
+    });
+    links.forEach(l=>{
+      const hidden = timeOn && (nodes[l.s].timeHidden||nodes[l.t].timeHidden);
+      l.el.setAttribute('opacity', hidden ? '0' : (l.baseOp!==undefined?l.baseOp:Math.min(0.28+l.w*0.16,0.9)));
+      l.el.setAttribute('stroke','#39404f');
+      if(l.lbl)l.lbl.style.opacity= hidden?'0':'1';
+    });
+    return;
     }
     const near=nbr[focusKey]||new Set();
     nodes.forEach(n=>{
       const k=n.d.person_key;
       const isF=(k===focusKey), isN=near.has(k);
-      n.el.setAttribute('opacity', (isF||isN)?'.95':'.12');
+      const timeHidden = timeOn && n.timeHidden;
+      const on = (isF||isN) && !timeHidden;
+      n.el.setAttribute('opacity', on?'.95':(timeHidden?'0':'.28'));
       n.el.setAttribute('stroke', isF?'#ffffff':'none');
       n.el.setAttribute('stroke-width', isF?'2.5':'0');
-      n.tx.style.opacity=(isF||isN)?'1':'.12';
+      const showLbl = (on && labelCandidate(n)
+                       && !(labelMode==='auto'&&n.overlapHidden));
+      n.tx.style.display = showLbl ? '' : 'none';
+      n.tx.style.opacity = on?'1':'.30';
     });
     links.forEach(l=>{
       const s=nodes[l.s].d.person_key, t2=nodes[l.t].d.person_key;
       const touch=(s===focusKey||t2===focusKey);
-      l.el.setAttribute('opacity', touch?'.95':'.05');
+      const timeHidden = timeOn && (nodes[l.s].timeHidden||nodes[l.t].timeHidden);
+      const on = touch && !timeHidden;
+      l.el.setAttribute('opacity', on?'.95':(timeHidden?'0':'.12'));
       l.el.setAttribute('stroke', touch?'#ff7a6b':'#39404f');
-      if(l.lbl) l.lbl.style.opacity= touch?'1':'0';
+      if(l.lbl) l.lbl.style.opacity= on?'1':'0';
     });
   }
-  svg.addEventListener('click',()=>{ if(focusKey){focusKey=null;applyFocus();} });
+  svg.addEventListener('click',()=>{ if(focusKey){focusKey=null;applyFocus();sync3dButton();} });
 
   function paint(){nodes.forEach(n=>{n.el.setAttribute('cx',n.x);n.el.setAttribute('cy',n.y);
-    n.tx.setAttribute('x',n.x);n.tx.setAttribute('y',n.y+n.r+14);
-    n.tx.style.display=(labelMode==='none'||(labelMode==='auto'&&n.labelHidden))?'none':'';});
+    n.tx.setAttribute('x',n.x);n.tx.setAttribute('y',n.y+n.r+14);});   // 标签显隐交给 applyFocus
     links.forEach(l=>{l.el.setAttribute('x1',nodes[l.s].x);l.el.setAttribute('y1',nodes[l.s].y);
       l.el.setAttribute('x2',nodes[l.t].x);l.el.setAttribute('y2',nodes[l.t].y);
       if(l.lbl){const a=nodes[l.s],b=nodes[l.t];
         l.lbl.setAttribute('x',(a.x+b.x)/2);l.lbl.setAttribute('y',(a.y+b.y)/2-3);}});
-    resolveLabelOverlap();}
+    // 三遍：定「谁该有标签」→ 算节点标签重叠 → 落地 → 边标签避让
+    updateDensity();
+    applyFocus(); resolveLabelOverlap(); applyFocus();
+    resolveEdgeLabelOverlap();
+  }
 
   // 节点标签碰撞规避：重叠的直接隐藏（优先保留关系度高的）
   // 用真实 getBBox 测量——中文按字符数估算宽度会偏小，导致漏判重叠
+  // 标签候选集判定：纯状态，不依赖上一轮 display（否则会连锁永久隐藏）
+  function labelCandidate(n){
+    if(labelMode==='none') return false;
+    if(TA.enabled && n.timeHidden) return false;
+    // DENSE 的低-degree 压制只在画面仍然拥挤时才生效；
+    // 时间过滤后可见节点变少 → 空间充裕 → 解禁，让标签补齐
+    if(labelMode==='auto' && n.labelHidden && !timeRelaxed) return false;
+    return true;
+  }
+  // 依据当前可见节点数更新密度状态
+  function updateDensity(){
+    if(!TA.enabled){ timeRelaxed = nodes.length<=28; return; }
+    const vis=nodes.filter(n=>!n.timeHidden).length;
+    timeRelaxed = vis<=28;
+  }
   function resolveLabelOverlap(){
-    const shown=nodes.filter(n=>n.tx.style.display!=='none')
+    // 所有节点都要重置标记，否则上轮被隐藏的节点会永远出局
+    nodes.forEach(n=>{n.overlapHidden=false;});
+    const shown=nodes.filter(n=>labelCandidate(n))
                      .sort((a,b)=>deg[b.d.person_key]-deg[a.d.person_key]);
     const placed=[];
     for(const n of shown){
-      // getBBox 对 display:none 元素返回空盒，测量前先临时置为可见
-      const prev=n.tx.style.display;
+      // getBBox 对 display:none 元素返回空盒，测量前先临时置为可见，测完还原
+      const before=n.tx.style.display;
       n.tx.style.display='';
       let box;
-      try{ box=n.tx.getBBox(); }catch(e){ box={x:n.x-30,y:n.y-10,width:60,height:14}; }
-      if(!box.width){ box={x:n.x-30,y:n.y-10,width:60,height:14}; }
+      try{ box=n.tx.getBBox(); }catch(e){ box=null; }
+      if(!box || !box.width){ box={x:n.x-30,y:n.y-10,width:60,height:14}; }
       let hit=false;
+      // 容差 4px：覆盖描边宽度（3.5/2≈1.75px）+ 安全间隙，否则描边看起来仍像叠字
+      const PAD=4;
       for(const p of placed){
-        if(box.x < p.x+p.w && box.x+box.width > p.x
-           && box.y < p.y+p.h && box.y+box.height > p.y){hit=true;break;}
+        if(box.x-PAD < p.x+p.w && box.x+box.width+PAD > p.x
+           && box.y-PAD < p.y+p.h && box.y+box.height+PAD > p.y){hit=true;break;}
       }
-      if(hit){n.tx.style.display='none';}
+      if(hit){n.overlapHidden=true;}      // 只做标记，最终显隐交给 applyFocus
       else placed.push({x:box.x,y:box.y,w:box.width,h:box.height});
+      n.tx.style.display=before;          // 还原
     }
+  }
+
+  // 边标签避让：必须同时避开已显示的节点标签，否则中心区会叠成一团
+  function resolveEdgeLabelOverlap(){
+    const boxes=[];
+    nodes.forEach(n=>{
+      if(n.tx.style.display==='none') return;
+      try{ const b=n.tx.getBBox(); if(b.width) boxes.push({x:b.x,y:b.y,w:b.width,h:b.height,t:n.tx.textContent}); }catch(e){}
+    });
+    // 候选 = 两端节点都可见的边（不看边的 opacity —— 边的 opacity 会被聚焦逻辑改写，
+    // 用它做筛选会漏掉本该避让的边）
+    const cand=links.filter(l=>{
+      if(!l.lbl) return false;
+      const a=nodes[l.s], b=nodes[l.t];
+      return !(TA.enabled && (a.timeHidden||b.timeHidden));
+    });
+    // 聚焦态下，与焦点无关的边标签应当隐藏 —— 记下来，别被避让逻辑放出来
+    const focusHidden=new Set();
+    if(focusKey){
+      cand.forEach(l=>{
+        const sk=nodes[l.s].d.person_key, tk=nodes[l.t].d.person_key;
+        if(sk!==focusKey && tk!==focusKey) focusHidden.add(l.lbl);
+      });
+    }
+    cand.sort((a,b)=>b.w-a.w);   // 权重高的优先保留
+    const keep=[];
+    const hidden=[];
+    // 边标签自身的可见状态也要重置：不能沿用上一轮的隐藏，否则永久消失
+    cand.forEach(l=>{ l.lbl.style.display=''; });
+    cand.forEach(l=>{
+      const t=l.lbl;
+      let box; try{ box=t.getBBox(); }catch(e){ box=null; }
+      if(!box||!box.width){ box={x:(nodes[l.s].x+nodes[l.t].x)/2-12,y:(nodes[l.s].y+nodes[l.t].y)/2-6,width:24,height:12}; }
+      // 容差 4px：覆盖描边宽度（3/2=1.5px）+ 安全间隙
+      const PAD=4;
+      let hit=false;
+      for(const b of boxes){ if(box.x-PAD<b.x+b.w&&box.x+box.width+PAD>b.x&&box.y-PAD<b.y+b.h&&box.y+box.height+PAD>b.y){hit=true;break;} }
+      for(const b of keep){ if(box.x-PAD<b.x+b.w&&box.x+box.width+PAD>b.x&&box.y-PAD<b.y+b.h&&box.y+box.height+PAD>b.y){hit=true;break;} }
+      if(hit){ hidden.push(t); }
+      else { keep.push({x:box.x,y:box.y,w:box.width,h:box.height}); }
+    });
+    // 本轮撞上的才隐藏；没撞的保持可见
+    hidden.forEach(t=>{t.style.display='none';});
+    // 聚焦态下无关的边标签重新藏起来
+    focusHidden.forEach(t=>{t.style.display='none';});
   }
 
   // 缩放到内容边界 —— 关键：让图撑满画布而不是挤在中间
@@ -525,18 +681,25 @@ __DATA__
     if(!nodes.length)return;
     const vw=svg.clientWidth, vh=svg.clientHeight;
     if(!vw||!vh) return;                 // 尺寸未就绪，等下一帧
-    // 用分位数而不是极值 —— 孤立点会把包围盒拉飞，导致图缩在角落
-    const xs=nodes.map(n=>n.x).sort((a,b)=>a-b);
-    const ys=nodes.map(n=>n.y).sort((a,b)=>a-b);
+    // 时间过滤时只按「可见节点」算边界 —— 否则被排除的暗点仍占位，画面永远是满的
+    const pool = (TA.enabled && nodes.some(n=>n.timeHidden))
+      ? nodes.filter(n=>!n.timeHidden) : nodes;
+    if(!pool.length) return;
+    const xs=pool.map(n=>n.x).sort((a,b)=>a-b);
+    const ys=pool.map(n=>n.y).sort((a,b)=>a-b);
     const q=(arr,p)=>arr[Math.min(arr.length-1,Math.max(0,Math.floor(arr.length*p)))];
+    // 节点少时用极值（分位数会把稀疏图缩在角落）；节点多时用分位数（孤立点会把包围盒拉飞）
+    const sparse = pool.length<=25;
+    const lo = sparse?0:0.02, hi = sparse?1:0.98;
     const pad=26;
-    let minX=q(xs,0.02)-pad, maxX=q(xs,0.98)+pad;
-    let minY=q(ys,0.02)-pad, maxY=q(ys,0.98)+pad;
+    let minX=q(xs,lo)-pad, maxX=q(xs,hi)+pad;
+    let minY=q(ys,lo)-pad, maxY=q(ys,hi)+pad;
     const cw=Math.max(maxX-minX,60), ch=Math.max(maxY-minY,60);
     const s=Math.min((vw-40)/cw,(vh-40)/ch);
     view.s=Math.max(0.3,Math.min(s,4));
     // 居中到「主群」而非全图（用中位数中心）
-    const cx=(q(xs,0.15)+q(xs,0.85))/2, cy=(q(ys,0.15)+q(ys,0.85))/2;
+    const cx=sparse?(q(xs,0)+q(xs,1))/2:(q(xs,0.15)+q(xs,0.85))/2;
+    const cy=sparse?(q(ys,0)+q(ys,1))/2:(q(ys,0.15)+q(ys,0.85))/2;
     view.tx=vw/2-cx*view.s;
     view.ty=vh/2-cy*view.s;
     applyView();
@@ -545,6 +708,81 @@ __DATA__
     root.setAttribute('transform',`translate(${view.tx},${view.ty}) scale(${view.s})`);
   }
   paint();
+
+  // 时间轴：拖动看圈子随时间扩张
+  const slider = document.getElementById('tslider');
+  const tval = document.getElementById('tval');
+  const thint = document.getElementById('thint');
+  const timebar = document.getElementById('timebar');
+
+  function fmtTime(ts){
+    const d=new Date(ts*1000);
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  }
+  function applyTime(){
+    if(!TA.enabled){return;}
+    const cut = timeCut;
+    nodes.forEach(n=>{
+      const t=n.d.t_norm;
+      let vis;
+      if(t===null||t===undefined) vis=true;       // 无时间数据：保留
+      else vis = (t<=cut+0.0001);
+      n.timeHidden = !vis;
+      n.hasTime = (t!==null&&t!==undefined);
+    });
+    links.forEach(l=>{
+      const a=nodes[l.s], b=nodes[l.t];
+      l.timeHidden = !!(a.timeHidden||b.timeHidden);
+    });
+    // 统计与文案
+    if(TA.max&&TA.min){
+      const ts = TA.min + (TA.max-TA.min)*cut;
+      tval.textContent = cut>=0.999 ? '全部' : fmtTime(ts);
+    }
+    const cnt = nodes.filter(n=>!n.timeHidden && n.hasTime).length;
+    thint.textContent = (cut>=0.999)
+      ? '拖动查看圈子随时间扩张 —— 只显示当时已进入你人脉的人'
+      : `此时已进入你人脉的有 ${cnt} 人（其余淡出）`;
+    // 交给聚焦逻辑统一渲染（两者叠加）
+    // 注意：也要重算标签重叠，否则被时间排除的节点会留下孤儿标签
+    updateDensity();
+    applyFocus(); resolveLabelOverlap(); applyFocus();
+    resolveEdgeLabelOverlap();
+    // 可见集合变了 → 重新布局（隐藏节点不参与），让稀疏的早期圈子聚拢
+    relayoutVisible();
+    fit();   // 重新缩放，让「已进入人脉的人」占满画布
+  }
+  // 只对可见节点重跑力导向（隐藏节点原地不动，回来时位置还在）
+  function relayoutVisible(){
+    const filtering = (TA.enabled && timeCut<0.999);
+    if(!filtering) return;
+    const act = nodes.filter(n=>!n.timeHidden);
+    if(act.length<2) return;
+    // 从圆环起步，避免沿用旧布局的惯性
+    act.forEach((n,i)=>{
+      const a=i/act.length*6.283;
+      n.x=W/2+Math.cos(a)*180; n.y=H/2+Math.sin(a)*180; n.vx=0; n.vy=0;});
+    for(let i=0;i<Math.min(400,120+act.length*8);i++)tick();
+    paint();
+  }
+  window.onTime=function(v){
+    timeCut = Number(v)/1000;
+    slider.style.setProperty('--p', (timeCut*100).toFixed(1)+'%');
+    applyTime();
+  };
+  window.resetTime=function(){
+    timeCut=1.0; slider.value=1000;
+    slider.style.setProperty('--p','100%');
+    applyTime();
+  };
+  if(TA.enabled){
+    timebar.style.display='block';
+    slider.style.setProperty('--p','100%');
+    tval.textContent='全部';
+    // 记录基础透明度，供时间过滤时还原（必须早于任何 applyTime 调用）
+    nodes.forEach(n=>{n.el.setAttribute('data-op', n.el.getAttribute('opacity')||'.92');});
+    links.forEach(l=>{l.baseOp=l.el.getAttribute('opacity')||'.3';});
+  }
 
   // 拖拽（空白处平移整个画布；拖节点只移动该节点）
   let dragNode=null, panning=false, px=0, py=0;
@@ -573,13 +811,38 @@ __DATA__
     view.ty=my-(my-view.ty)*(ns/view.s);
     view.s=ns; applyView();},{passive:false});
 
+  // 3D 聚光：静态 HTML 不能直接跑命令，所以给出可复制的命令
+  function sync3dButton(){
+    const btn=document.getElementById('btn3d');
+    if(!btn) return;
+    btn.style.display = focusKey? 'inline-block':'none';
+  }
+  window.make3d=function(){
+    if(!focusKey) return;
+    const n=nodes.find(x=>x.d.person_key===focusKey);
+    if(!n) return;
+    const nm=String(n.d.display_name||'').replace(/"/g,'');
+    const cmd='renpu graph3d --person "'+nm+'" --share';
+    const tip=document.getElementById('tip');
+    const done=(ok)=>{
+      tip.style.display='block';
+      tip.style.left='50%'; tip.style.top='76px';
+      tip.innerHTML='<div class="tipname">'+(ok?'✅ 命令已复制':'命令：')+'</div>'+
+        '<div class="tipmeta">'+cmd+'</div>';
+      clearTimeout(window.__t3);
+      window.__t3=setTimeout(()=>{tip.style.display='none';},4200);
+    };
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(cmd).then(()=>done(true),()=>done(false));
+    } else { done(false); }
+  };
   window.restart=function(){nodes.forEach((n,i)=>{
     n.x=W/2+Math.cos(i/nodes.length*6.28)*260;n.y=H/2+Math.sin(i/nodes.length*6.28)*260;
     n.vx=0;n.vy=0;});for(let i=0;i<ITER;i++)tick();paint();fit();};
   window.toggleLabels=function(){
     labelMode = labelMode==='auto' ? 'all' : (labelMode==='all' ? 'none' : 'auto');
-    nodes.forEach(n=>{n.tx.style.display=(labelMode==='none'||(labelMode==='auto'&&n.labelHidden))?'none':'';});
-    if(labelMode!=='auto') resolveLabelOverlap();
+    // 统一走 applyFocus → resolveLabelOverlap → applyFocus，保证与时间过滤/聚焦一致
+    updateDensity(); applyFocus(); resolveLabelOverlap(); applyFocus();
     const btn=document.querySelector('.toolbar button:nth-child(2)');
     if(btn) btn.textContent = labelMode==='auto'?'显示全部标签' : (labelMode==='all'?'隐藏全部标签':'标签：自动');
   };

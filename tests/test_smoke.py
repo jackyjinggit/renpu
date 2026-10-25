@@ -170,6 +170,19 @@ def main():
             rooms = []
         if len(rooms) > r["weight"] + 0.001:
             bad += 1
+    # 3D 关系圈：单文件、零外链、分享模式脱敏
+    import render3d
+    g3d_path, g3d = render3d.write_graph_3d(con, TEST_HOME / "g3d.html",
+                                             limit=12, share=True)
+    g3d_html = Path(g3d_path).read_text(encoding="utf-8")
+    assert "http://" not in g3d_html.replace("http://www.w3.org", "")         and "https://" not in g3d_html, "3D 视图有外链"
+    assert len(g3d["nodes"]) > 0, "3D 视图没有节点"
+    assert g3d["nodes"][0]["is_center"], "3D 视图第一个节点不是中心人物"
+    for n in g3d["nodes"]:
+        assert n.get("msg_total") is None, f"3D 分享模式仍带消息数：{n['display_name']}"
+    for r in g3d.get("rooms", []):
+        assert "已脱敏" in r["name"], f"3D 分享模式群名没脱敏：{r['name']}"
+    print(f"  ✅ 3D 圈：{len(g3d['nodes'])} 节点 / {len(g3d['links'])} 边 / 零外链 / 已脱敏")
     con.close()
     assert bad == 0, f"edge.rooms 又出现覆盖不一致（{bad} 条）"
     print("  ✅ edge.rooms 一致性（rooms 长度 ≤ weight）")
