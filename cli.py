@@ -9,6 +9,7 @@
 """
 import argparse
 import json
+import os
 import sys
 import time
 import traceback
@@ -223,9 +224,29 @@ def cmd_ingest(a):
         （默认）        从微信库拉（需 wc_live 或 wc_export，已配置才会成功）
     """
     if a.demo:
+        # 演示数据默认灌进**独立的 demo 库**，不占用真实库的位置。
+        # 否则用户跑一次 `renpu ingest --demo`，真库位置就被合成数据占了，
+        # 后面接真实微信时会混在一起（而且 demo 人名会留在库里）。
         from adapters import demo
+        import config
+        import core
+        # 库位置优先级：
+        #   1. 显式设了 RENPU_DB_PATH → 尊重它（用户/测试的明确意图）
+        #   2. --in-place → 当前库
+        #   3. 默认 → <data_home>/demo/renpu.db（演示专用，不占真实库位置）
+        explicit = os.environ.get("RENPU_DB_PATH")
+        if getattr(a, "in_place", False) or explicit:
+            demo_db = Path(explicit) if explicit else Path(config.DB_PATH)
+        else:
+            demo_db = _data_home() / "demo" / "renpu.db"
+            config.DB_PATH = demo_db
+            core.DB_PATH = demo_db
+        demo_db.parent.mkdir(parents=True, exist_ok=True)
+        core.init_db(demo_db)
         r = demo.ingest(progress=print if not a.json else (lambda *_: None))
+        where = "当前库" if getattr(a, "in_place", False) else str(demo_db)
         print(f"✅ 演示数据注入完成：人 {r['people']} · 消息 {r['messages']} · 关系边 {r['edges']}")
+        print(f"   位置：{where}")
         out(r, a.json)
         return
     # 真实路径
@@ -503,6 +524,8 @@ def build_parser():
     sub.add_parser("pull", help="解密拉取最新微信快照").set_defaults(fn=cmd_pull)
 
     s = sub.add_parser("ingest", help="摄取数据入库（默认微信库；加 --demo 用演示数据）")
+    s.add_argument("--in-place", action="store_true", dest="in_place",
+                   help="--demo 时把演示数据灌进当前库（默认灌进独立的 demo 库）")
     s.add_argument("--days", type=int, default=90)
     s.add_argument("--demo", action="store_true", help="用演示合成数据（无需任何配置）")
     s.add_argument("--pull", action="store_true", help="先解密再摄取（仅真实路径）"); s.set_defaults(fn=cmd_ingest)

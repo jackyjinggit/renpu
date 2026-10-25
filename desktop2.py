@@ -83,6 +83,41 @@ def load_user_config() -> dict:
         return {}
 
 
+def retarget_paths(env: dict) -> dict:
+    """把 config / core 模块里**已绑定**的路径常量改到目标目录。
+
+    为什么必须做：config.py 在 import 时就把 DB_PATH / SCHEMA / LOG_DIR /
+    EXPORT_DIR 求值了（`from config import DB_PATH` 之后 core.DB_PATH 就是
+    一个死值）。单文件 EXE 的 GUI 里，所有 CLI 命令都是**进程内调用**，
+    没有新进程 → 不会重新 import config → 环境变量改了也没用。
+
+    结果就是：GUI 里点「生成演示数据」，演示数据会写进用户的真实库。
+    这个函数把这件事堵死。
+
+    必须在**任何** core.connect() 之前调用。
+    """
+    import config
+    import core
+
+    data_home = Path(env.get("RENPU_DATA_HOME") or config.DATA_HOME)
+    db_path = Path(env.get("RENPU_DB_PATH") or (data_home / "renpu.db"))
+    log_dir = Path(env.get("RENPU_LOG_DIR") or (data_home / "logs"))
+    export_dir = Path(env.get("RENPU_EXPORT_DIR") or (data_home / "exports"))
+
+    for p in (data_home, log_dir, export_dir):
+        p.mkdir(parents=True, exist_ok=True)
+
+    config.DATA_HOME = data_home
+    config.DB_PATH = db_path
+    config.LOG_DIR = log_dir
+    config.EXPORT_DIR = export_dir
+    # core 用的是 `from config import DB_PATH` —— 导入时拷的副本，必须单独改
+    core.DB_PATH = db_path
+    core.SCHEMA = config.SCHEMA
+    return {"data_home": data_home, "db_path": db_path,
+            "log_dir": log_dir, "export_dir": export_dir}
+
+
 def save_user_config(cfg: dict) -> None:
     p = user_config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -984,6 +1019,21 @@ class RenpuDesktop(tk.Tk):
         try:
             if getattr(sys, "frozen", False):
                 # 单文件 EXE：进程内调用（每次启动都要解压运行时，fork 子进程太慢）
+                #
+                # 关键：进程内调用不会重新 import config，所以光改环境变量没用。
+                # 必须把 config/core 里已绑定的路径常量也一起改掉，
+                # 否则演示数据会写进用户的真实库。
+                #
+                # 注意 env 可能是 None（比如「生成关系图谱」不带 env）——
+                # 那时也必须重定向到当前生效的库，否则 GUI 画的是演示数据，
+                # CLI 读的却是用户真实库（两套数据对不上）。
+                target = env or {
+                    "RENPU_DATA_HOME": str(self.active_db.parent),
+                    "RENPU_DB_PATH": str(self.active_db),
+                    "RENPU_LOG_DIR": str(self.active_db.parent / "logs"),
+                    "RENPU_EXPORT_DIR": str(self.active_db.parent / "exports"),
+                }
+                retarget_paths(target)
                 import cli as cli_mod
                 ns = cli_mod.build_parser().parse_args(list(args))
                 with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
@@ -997,8 +1047,14 @@ class RenpuDesktop(tk.Tk):
             if r.returncode != 0:
                 return False, (r.stderr or r.stdout)
             return True, r.stdout
-        except SystemExit:
-            return False, buf.getvalue()
+        except SystemExit as e:
+            # SystemExit(0) 是「正常跑完」，不是失败。
+            # tour 走完就是 raise SystemExit(0) —— 以前这里一律当失败，
+            # 结果 GUI 弹「生成失败」错误框，演示数据其实早就建好了。
+            code = e.code
+            if code in (0, None):
+                return True, buf.getvalue()
+            return False, buf.getvalue() or f"退出码 {code}"
         except Exception as exc:
             return False, str(exc)
         finally:

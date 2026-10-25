@@ -254,8 +254,14 @@ def main():
     print(f"    1. 打开图谱看效果：{graph_path}")
     print(f"    2. 读报告：      {report}")
     print(f"    3. 自己玩：")
-    print(f"       cd {ROOT}")
-    print(f"       {py} cli.py who 林夏")
+    if getattr(sys, "frozen", False):
+        # 单文件 EXE：没有 cli.py，命令要按 EXE 的方式给
+        exe = Path(sys.executable).resolve()
+        print(f"       {exe} who 林夏")
+        print(f"       {exe} graph --share")
+    else:
+        print(f"       cd {ROOT}")
+        print(f"       {py} cli.py who 林夏")
     print()
     if not a.keep and not a.out:
         print(f"  {DIM}（演示库在 {out_dir}，可删）{RESET}")

@@ -177,6 +177,15 @@ def main():
     assert any("黑客松" in (h["snippet"] or "") for h in hit), "搜索结果与关键词无关"
     print(f"  ✅ 中文搜索：黑客松 → {len(hit)} 条")
 
+    # 8b2. demo 库隔离：默认灌进 <data_home>/demo/，不占真实库位置
+    #      （曾经 `renpu ingest --demo` 会把合成数据写进真实库位置）
+    import config
+    demo_home = Path(config.DATA_HOME) / "demo" / "renpu.db"
+    real_slot = Path(config.DATA_HOME) / "renpu.db"
+    assert demo_home != real_slot, "demo 库与真实库位置相同 —— 会互相污染"
+    assert "demo" in demo_home.parts, f"demo 库不在独立子目录：{demo_home}"
+    print(f"  ✅ demo 库隔离：{demo_home.parent.name}/（真实库位 {real_slot.name} 独立）")
+
     # 8c. demo 库 room_key 口径一致：edge.rooms 的群 key 必须能在 room 表里找到
     room_keys = set(r[0] for r in con.execute("SELECT room_key FROM room"))
     edge_rooms = set()
