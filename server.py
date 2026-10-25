@@ -86,9 +86,7 @@ def api_who(con, name, limit=30):
 
 
 def api_search(con, q, limit=30):
-    rows = [dict(r) for r in con.execute(
-        "SELECT snippet, person_key, ts FROM msg_fts WHERE msg_fts MATCH ? ORDER BY ts DESC LIMIT ?",
-        (q.replace('"', '""'), limit)).fetchall()]
+    rows = core.search_messages(con, q, limit=limit)
     for r in rows:
         r["when"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["ts"]))
         nm = con.execute("SELECT display_name FROM person WHERE person_key=?", (r["person_key"],)).fetchone()

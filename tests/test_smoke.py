@@ -170,6 +170,37 @@ def main():
             rooms = []
         if len(rooms) > r["weight"] + 0.001:
             bad += 1
+    # 8b. 中文全文检索：FTS5 默认分词对中文按单字切分，整词 MATCH 会命中 0
+    #     必须走 core.search_messages（加 * 前缀 + LIKE 兜底）
+    hit = core.search_messages(con, "黑客松", limit=5)
+    assert hit, "中文搜索命中 0 条 —— FTS 查询口径坏了"
+    assert any("黑客松" in (h["snippet"] or "") for h in hit), "搜索结果与关键词无关"
+    print(f"  ✅ 中文搜索：黑客松 → {len(hit)} 条")
+
+    # 8c. demo 库 room_key 口径一致：edge.rooms 的群 key 必须能在 room 表里找到
+    room_keys = set(r[0] for r in con.execute("SELECT room_key FROM room"))
+    edge_rooms = set()
+    for (rs,) in con.execute("SELECT rooms FROM edge WHERE rooms IS NOT NULL AND rooms != ''"):
+        edge_rooms.update(json.loads(rs))
+    assert edge_rooms, "edge.rooms 全空"
+    orphan = edge_rooms - room_keys
+    assert not orphan, f"edge.rooms 里有对不上 room 表的群 key：{list(orphan)[:3]}"
+    print(f"  ✅ room_key 口径一致：{len(edge_rooms)} 个群全部对得上")
+
+    # 8d. 人物档案页：单文件、零外链、分享模式脱敏
+    import render_profile
+    prof_path, prof = render_profile.render_profile(con, "林夏",
+                                                    TEST_HOME / "profile.html", share=False)
+    prof_html = Path(prof_path).read_text(encoding="utf-8")
+    assert "http://" not in prof_html.replace("http://www.w3.org", "")         and "https://" not in prof_html, "档案页有外链"
+    for key in ("name", "edges", "todos", "events", "recent", "timeline", "rooms", "tags"):
+        assert key in prof, f"档案字典缺字段：{key}"
+    share_path, sprof = render_profile.render_profile(con, "林夏",
+                                                      TEST_HOME / "profile_share.html", share=True)
+    share_html = Path(share_path).read_text(encoding="utf-8")
+    assert "林夏" not in share_html, "分享版档案页泄漏了真实姓名"
+    print(f"  ✅ 档案页：{len(prof['edges'])} 关系人 / 零外链 / 分享版无真名")
+
     # 3D 关系圈：单文件、零外链、分享模式脱敏
     import render3d
     g3d_path, g3d = render3d.write_graph_3d(con, TEST_HOME / "g3d.html",

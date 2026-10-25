@@ -67,16 +67,19 @@ SNIPPETS = [
 ]
 
 
+# 群模板：(room_key, 群名, 成员)
+# room_key 必须与下面 core.upsert_room(f"wxroom:{name}") 的口径完全一致，
+# 否则 edge.rooms 里的群 key 对不上 room 表 → 「共同群数」和「所在群」全是错的。
 ROOM_TEMPLATES = [
-    ("room:demo_dev",  "开发者社区 线上",
+    ("wxroom:开发者社区 线上",  "开发者社区 线上",
      ["wx:demo_xu", "wx:demo_jiang", "wx:demo_su", "wx:demo_chen"]),
-    ("room:demo_aaa",  "核心圈内部群",
+    ("wxroom:核心圈内部群",  "核心圈内部群",
      [p[0] for p in PEOPLE if p[2] == "AAA"][:5]),
-    ("room:demo_school", "同届群",
+    ("wxroom:同届群", "同届群",
      [p[0] for p in PEOPLE if "同届" in (p[5] or "")][:6]),
-    ("room:demo_hack", "黑客松组队群",
+    ("wxroom:黑客松组队群", "黑客松组队群",
      ["wx:demo_luo", "wx:demo_gu", "wx:demo_xu", "wx:demo_lin", "wx:demo_wen"]),
-    ("room:demo_proj", "开源项目组",
+    ("wxroom:开源项目组", "开源项目组",
      ["wx:demo_lin", "wx:demo_chen", "wx:demo_xu", "wx:demo_su"]),
 ]
 

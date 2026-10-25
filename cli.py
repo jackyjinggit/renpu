@@ -328,10 +328,7 @@ def cmd_who(a):
 
 def cmd_search(a):
     con = core.connect()
-    q = a.q.replace('"', '""')
-    rows = [dict(r) for r in con.execute(
-        "SELECT snippet, person_key, conv_key, ts FROM msg_fts WHERE msg_fts MATCH ? ORDER BY ts DESC LIMIT ?",
-        (q, a.limit)).fetchall()]
+    rows = core.search_messages(con, a.q, limit=a.limit)
     for r in rows:
         r["when"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["ts"]))
         nm = con.execute("SELECT display_name FROM person WHERE person_key=?", (r["person_key"],)).fetchone()
@@ -439,6 +436,25 @@ def cmd_graph(a):
         print("   用浏览器打开即可（单文件，可直接发给别人）")
 
 
+def cmd_profile(a):
+    """生成人物档案页 HTML（单文件，可直接分享）。"""
+    import render_profile
+    con = core.connect()
+    outp = Path(a.out) if a.out else (_data_home() / "exports" / "renpu-profile.html")
+    outp.parent.mkdir(parents=True, exist_ok=True)
+    path, prof = render_profile.render_profile(con, a.name, outp, share=a.share)
+    con.close()
+    if a.json:
+        out({"title": "人物档案", "file": str(path), "name": prof["name"],
+             "edges": len(prof["edges"]), "todos": len(prof["todos"]),
+             "events": len(prof["events"])}, True)
+    else:
+        print(f"✅ 人物档案已生成：{path}")
+        print(f"   {prof['name']} · {len(prof['edges'])} 个关系人 · "
+              f"{len(prof['todos'])} 条待办 · {len(prof['events'])} 条事件")
+        print("   用浏览器打开即可（单文件，可直接发给别人）")
+
+
 def cmd_graph3d(a):
     """生成 3D 关系圈聚光 HTML（单文件，可直接分享）。"""
     import render3d
@@ -537,6 +553,13 @@ def build_parser():
     s.add_argument("--out", help="输出路径（默认落在数据目录）")
     s.add_argument("--title", help="图谱标题")
     s.set_defaults(fn=cmd_graph)
+
+    s = sub.add_parser("profile", help="生成人物档案页 HTML（单文件）")
+    s.add_argument("name", help="人物名字或 person_key")
+    s.add_argument("--share", action="store_true",
+                   help="分享模式：真名脱敏、时间降级到天（可安全发给别人）")
+    s.add_argument("--out", help="输出路径（默认落在数据目录）")
+    s.set_defaults(fn=cmd_profile)
 
     s = sub.add_parser("graph3d", help="生成 3D 关系圈聚光 HTML（聚焦某人的关系结构）")
     s.add_argument("--person", help="中心人物的名字或 person_key（默认自动选关系最多的人）")

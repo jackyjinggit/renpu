@@ -245,6 +245,37 @@ def add_todo(con, title, person_key=None, kind="followup", due=None, evidence=No
 
 # ───────────────────────── 统计 ─────────────────────────
 
+def search_messages(con, q, limit=30):
+    """全文检索消息。
+
+    FTS5 的默认分词器对中文按**单字**切分，整词 MATCH 会命中 0 条
+    （实测 demo 库：MATCH '黑客松' → 0，MATCH '黑客松*' → 183）。
+    所以：
+      1. 关键词加 * 前缀做前缀匹配（中文场景的正确用法）
+      2. FTS 仍为 0 时回退 LIKE —— 兜底，保证「搜得到」永远成立
+    """
+    q = (q or "").strip()
+    if not q:
+        return []
+    # FTS 查询串：双引号包裹 + 前缀通配
+    fts_q = '"' + q.replace('"', '""') + '"*'
+    rows = []
+    try:
+        rows = con.execute(
+            "SELECT snippet, person_key, conv_key, ts FROM msg_fts "
+            "WHERE msg_fts MATCH ? ORDER BY ts DESC LIMIT ?", (fts_q, limit)).fetchall()
+    except Exception:
+        rows = []          # FTS 语法/索引问题 → 走 LIKE 兜底
+    if rows:
+        return [dict(r) for r in rows]
+    # 兜底：LIKE（不支持中文分词，但保证不搜不到）
+    like = f"%{q}%"
+    rows = con.execute(
+        "SELECT snippet, person_key, conv_key, ts FROM msg_fts "
+        "WHERE snippet LIKE ? ORDER BY ts DESC LIMIT ?", (like, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def stats(con):
     def one(sql, *a):
         r = con.execute(sql, a).fetchone()
