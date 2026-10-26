@@ -327,7 +327,14 @@ def main():
     assert _g3.get("nodes"), "API graph3d 返回空节点"
     _pr = _server.api_profile(con, "不存在的人xyz", True)
     assert _pr.get("found") is False, "API 对不存在的人应返回 found=false"
-    print("  ✅ API：脱敏命中 0 / key 唯一 / 3D 非空 / 错误路径正确")
+    # 'me' 是系统标识（本人），不是姓名 —— 不能进脱敏校验表。
+    # 实测：demo 的 identity 表里 me 的 channel_id='me'，
+    #      被当成真实姓名 → API 直接 500（且只在 EXE 的库路径下暴露）。
+    assert not _server._is_name_like("me"), "'me' 被当成姓名了"
+    assert not _server._is_name_like("wx:demo_xxx"), "内部 key 被当成姓名了"
+    assert not _server._is_name_like("7"), "纯数字被当成姓名了"
+    assert _server._is_name_like("林夏"), "正常中文名没被识别"
+    print("  ✅ API：脱敏命中 0 / key 唯一 / 3D 非空 / 错误路径正确 / 系统标识不误判")
 
     # 8d. 人物档案页：单文件、零外链、分享模式脱敏
     import render_profile

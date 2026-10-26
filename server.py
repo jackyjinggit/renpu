@@ -302,6 +302,11 @@ def _is_name_like(nm) -> bool:
     t = str(nm).strip()
     if len(t) < 2:
         return False
+    # 系统标识不是姓名：'me'（本人）、'wx:demo_*' 这类内部 key
+    if t.lower() in ("me", "self"):
+        return False
+    if t.startswith("wx:"):
+        return False
     if not any(ch.isalpha() or ord(ch) > 0x2E80 for ch in t):
         return False
     return True
