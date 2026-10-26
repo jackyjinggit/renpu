@@ -297,6 +297,19 @@ def main():
         assert n["display_name"].startswith(("当事人", "关系人", "我")),             f"3D 分享模式节点名没脱敏：{n['display_name']}"
     print(f"  ✅ 3D 分享脱敏：命中 0 / 节点名与 key 全脱敏")
 
+    # 8b4. demo 库必须含「我」+ 私聊关系边
+    #      （实测：demo 之前没有 me 这个 person 记录，
+    #        图上找不到自己、搜索结果显示「谁=me」、没有以我为中心的私聊边）
+    _me = con.execute("SELECT person_key, display_name FROM person "
+                      "WHERE person_key='me'").fetchone()
+    assert _me is not None, "demo 库缺少「我」（me）节点"
+    assert _me[1], "「我」的显示名为空"
+    _ndirect = con.execute("SELECT COUNT(*) FROM edge WHERE kind='direct'").fetchone()[0]
+    assert _ndirect > 0, "demo 库没有私聊关系边（direct）"
+    _nme = con.execute("SELECT COUNT(*) FROM edge WHERE src='me' OR dst='me'").fetchone()[0]
+    assert _nme > 0, "demo 库里「我」没有任何关系边"
+    print(f"  ✅ demo 库含「我」+ {_ndirect} 条私聊边（我的 {_nme} 条）")
+
     # 8c3. API 端点：脱敏响应 + key 唯一 + 错误路径
     import server as _server
     for fn, args in ((_server.api_graph, (con, 8, True, "json")),

@@ -17,6 +17,7 @@ import time
 
 import core
 from config import DEMO_PEOPLE, DEMO_MESSAGES
+from adapters.wechat import DIRECT_MIN_MESSAGES  # 私聊关系边阈值（与真实源同口径）
 
 
 # (person_key, 姓名, 分层, 关系描述, 角色, 圈层)  —— 全虚构
@@ -101,6 +102,13 @@ def ingest(progress=print):
             core.tag_person(grm, pk, tag, source="demo")
         core.upsert_identity(grm, pk, "demo", pk.split(":")[1])
 
+    # ── 「我」──
+    # demo 之前没有 me 这个 person 记录（只把 "me" 当 sender 用），
+    # 后果：图上找不到自己、搜索结果显示「谁=me」、没有以我为中心的私聊边。
+    core.upsert_person(grm, "me", "我", source="demo",
+                       note="演示数据 · 这是你")
+    core.upsert_identity(grm, "me", "demo", "me")
+
     # ── 群 ──
     for rk, name, member_ids in ROOM_TEMPLATES:
         member_ids = [m for m in member_ids if m]
@@ -152,6 +160,25 @@ def ingest(progress=print):
                 core.add_edge(grm, a, b, "co_group", 1.0, [rk])
                 edges += 1
     grm.commit()
+
+    # ── 私聊关系边（direct）──
+    # demo 的消息 conv_key 就是对方的 person_key（私聊结构），
+    # 所以直接按 conv_key 聚合就能得到「我↔某人」的私聊关系。
+    # 这与真实微信的推导口径一致（wechat.py 里同款逻辑）。
+    direct = 0
+    for r in grm.execute(
+            "SELECT conv_key, COUNT(*) c FROM msg_index "
+            "WHERE conv_key LIKE 'wx:%' GROUP BY conv_key HAVING c >= ?",
+            (DIRECT_MIN_MESSAGES,)).fetchall():
+        other = r["conv_key"]
+        if other == "wx:me":
+            continue
+        a, b = ("me", other) if "me" < other else (other, "me")
+        core.add_edge(grm, a, b, "direct", float(r["c"]), None,
+                      note=f"私聊 {r['c']} 条", accumulate=False)
+        direct += 1
+    grm.commit()
+    edges += direct
 
     # 写死几个关系事件/待办（视频脚本要演的固定人物必须命中，否则画面空）
     progress("… 注入 demo 关系事件/待办")

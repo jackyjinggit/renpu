@@ -218,6 +218,43 @@ def cmd_pull(a):
     _require_wx().pull_fresh()
 
 
+def _set_active_db(db_path):
+    """把「当前库」写进用户配置，让后续所有命令都指向它。
+
+    为什么需要（2026-10-26 实测）：
+        demo 数据隔离到 <data_home>/demo/ 之后，`init` 建的库在 <data_home>/renpu.db，
+        两者不是同一个 → `ingest --demo` 灌完数据，紧接着 `profile 某人` 却说找不到。
+        单文件 EXE 里更明显：用户只看到「明明灌了数据，怎么查不到」。
+
+    做法：写 config.json 的 db_path（config.py 已经支持这个字段，用户配置优先于默认值）。
+    失败不致命 —— 只是当前库没切，用户仍可用 --db 或环境变量指定。
+    """
+    try:
+        import config
+        cfg_path = config._user_config_dir() / "config.json"
+        cfg = {}
+        if cfg_path.exists():
+            try:
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            except Exception:
+                cfg = {}
+        cfg["db_path"] = str(db_path)
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+        # 进程内也要立即生效（config.DB_PATH 是 import 时求值的）
+        config.DB_PATH = Path(db_path)
+        try:
+            import core
+            core.DB_PATH = Path(db_path)
+        except Exception:
+            pass
+        return True
+    except Exception as exc:
+        print(f"（当前库没切成功：{exc}；可用 RENPU_DB_PATH 指定）")
+        return False
+
+
 def cmd_ingest(a):
     """摄取数据。两条路径：
         --demo         合成数据（无需任何配置，全新用户第一跑）
@@ -247,6 +284,12 @@ def cmd_ingest(a):
         where = "当前库" if getattr(a, "in_place", False) else str(demo_db)
         print(f"✅ 演示数据注入完成：人 {r['people']} · 消息 {r['messages']} · 关系边 {r['edges']}")
         print(f"   位置：{where}")
+        if not getattr(a, "in_place", False):
+            # 把「当前库」切到 demo 库 —— 否则 demo 数据在一个库里、
+            # 而 init/profile/graph 全都查另一个库（真库位），
+            # 用户会看到「明明灌了数据，profile 却说找不到这个人」。
+            _set_active_db(demo_db)
+            print(f"   当前库已切到演示库：{demo_db}")
         out(r, a.json)
         return
     # 真实路径
