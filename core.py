@@ -233,14 +233,29 @@ def add_event(con, person_key, kind, ts, title=None, detail=None, evidence=None,
     )
 
 
-def add_edge(con, src, dst, kind, weight=1.0, rooms=None, note=None):
+def add_edge(con, src, dst, kind, weight=1.0, rooms=None, note=None, accumulate=True):
     """写入/累加一条关系边。
 
     rooms 是「共同出现的群」列表。累加时必须**合并去重**而不是覆盖——
     否则会出现 weight=3 但 rooms 只剩最后一个群的数据不一致
     （权重说 3 个群，群列表却只列 1 个，下游标签会误导人）。
+
+    accumulate=False → **覆盖** weight（不累加）。
+    私聊关系边必须用覆盖模式：它的权重就是「私聊消息总数」，
+    每次摄取都要重算；用累加会让权重随重跑次数虚增。
     """
     incoming = json.dumps(rooms or [], ensure_ascii=False)
+    if not accumulate:
+        con.execute(
+            "INSERT INTO edge(src,dst,kind,weight,rooms,note,updated_at) VALUES(?,?,?,?,?,?,?) "
+            "ON CONFLICT(src,dst,kind) DO UPDATE SET "
+            "  weight=excluded.weight, "
+            "  rooms=excluded.rooms, "
+            "  note=excluded.note, "
+            "  updated_at=excluded.updated_at",
+            (src, dst, kind, weight, incoming, note, now()),
+        )
+        return
     con.execute(
         "INSERT INTO edge(src,dst,kind,weight,rooms,note,updated_at) VALUES(?,?,?,?,?,?,?) "
         "ON CONFLICT(src,dst,kind) DO UPDATE SET "

@@ -96,6 +96,23 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
         rows.sort(key=lambda r: (-r["degree"], -(r.get("msg_total") or 0)))
     people = rows[:limit]
 
+    # 1b. 「我」必须始终在图里（仁谱是**我**的人脉谱系）。
+    #     实测问题：person 表里 'me' 的 msg_total=0（自己的消息不计入自己），
+    #     按消息数排序时它永远垫底 → 选不进前 N → 所有「我↔某人」的
+    #     direct 私聊边因缺一端被整条丢掉。
+    #     结果：图上看不到自己，也看不到自己最紧密的那些关系。
+    if not any(p["person_key"] == "me" for p in people):
+        me_row = con.execute(
+            "SELECT person_key AS person_key, display_name AS display_name, "
+            "tier AS tier, circle AS circle, role AS role, "
+            "msg_total AS msg_total, msg_d30 AS msg_d30 FROM person "
+            "WHERE person_key = 'me'").fetchone()
+        if me_row:
+            me = dict(me_row)
+            me["degree"] = deg.get("me", 0)
+            me["is_self"] = True
+            people = [me] + people[:limit - 1]
+
     # 2. 大库里只画「有关系的人」—— 否则 21823 人里挑前 50 个会碎成散点。
     #    小库（demo 10 人）不过滤，否则会让人以为数据丢了。
     if len(people) > 20:
@@ -106,11 +123,32 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
         return {"nodes": [], "links": [], "rooms": []}
 
     if share:
-        # 分享模式：去掉群名、圈子、角色、消息数——只留「谁」和「多紧密」
+        # 分享模式：人名和 person_key 都必须脱敏
+        # （🔴 2026-10-26 真实库实测发现这是漏洞：
+        #   原实现只清了群名/圈子/角色/消息数，**人名原样保留**，
+        #   实测 share 版图里能直接读出好几位联系人的真名。
+        #   人名才是最敏感的部分 —— 分享模式的意义就是「给人看结构，不给人看身份」。
+        #   person_key（wx:wxid_xxx）同样敏感：它就是能加好友的稳定标识。
+        #   规则：me → 「我」/ key:me；其他人 → 「关系人 N」/ key:N
+        #   （按 person_key 稳定编号，同一页各处指向同一个人）
+        label_of, key_of = {}, {}
+        ordered_people = sorted(people, key=lambda x: x["person_key"])
+        for i, p in enumerate(ordered_people, 1):
+            pk = p["person_key"]
+            if pk == "me":
+                label_of[pk] = "我"
+                key_of[pk] = "me"
+            else:
+                label_of[pk] = f"关系人 {i}"
+                key_of[pk] = f"p{i}"
         for p in people:
+            p["display_name"] = label_of.get(p["person_key"], "关系人")
             p["circle"] = None
             p["role"] = None
             p["msg_total"] = None
+            p["tier"] = None
+    else:
+        key_of = {p["person_key"]: p["person_key"] for p in people}
 
     keys = [p["person_key"] for p in people]
     ph = ",".join("?" * len(keys))
@@ -118,10 +156,12 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
         f"SELECT src, dst, weight, kind, rooms FROM edge "
         f"WHERE src IN ({ph}) AND dst IN ({ph}) AND weight >= ? "
         f"ORDER BY weight DESC", keys + keys + [min_weight]).fetchall()]
-    # 去重（A→B 与 B→A 只留一条）
+    # 去重（A→B 与 B→A 只留一条）。
+    # ⚠️ 去重键必须带 kind：co_group（群共现）与 direct（私聊）是**不同的边**，
+    #    只按 (src,dst) 去重会因 direct 权重大而把群共现边整条挤掉。
     seen, uniq = set(), []
     for l in links:
-        pair = tuple(sorted((l["src"], l["dst"])))
+        pair = (l["src"], l["dst"], l["kind"])
         if pair in seen:
             continue
         seen.add(pair)
@@ -129,6 +169,7 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
     # 只保留两端都在节点集里的边
     kset = set(keys)
     uniq = [l for l in uniq if l["src"] in kset and l["dst"] in kset]
+
 
     # 3. 社区检测：群共现天然形成社区，一眼看出「谁跟谁是一伙的」
     import community as comm
@@ -172,6 +213,16 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
                 cnt = 0
         l["shared_rooms"] = cnt
 
+    # 分享模式：把 person_key 换成假 key（wx:xxx 本身就是能加好友的标识）。
+    # ⚠️ 必须放在社区检测之后 —— 社区检测用真 person_key 索引 comm_info，
+    #    提前换掉会全部失配（圈子着色会整片消失）。
+    if share:
+        for p in people:
+            p["person_key"] = key_of.get(p["person_key"], "p?")
+        for l in uniq:
+            l["src"] = key_of.get(l["src"], "p?")
+            l["dst"] = key_of.get(l["dst"], "p?")
+
     # 房间（作为图上的分组提示）
     rooms = [dict(r) for r in con.execute(
         f"SELECT room.room_key AS room_key, room.name AS name, "
@@ -184,6 +235,7 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
         for r in rooms:
             r["name"] = "群（已脱敏）"
     return {"nodes": people, "links": uniq, "rooms": rooms,
+            "share": bool(share),
             "time_axis": {"enabled": bool(fs), "min": tmin, "max": tmax,
                           "count": len(fs)}}
 
@@ -347,7 +399,8 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
     <div class="legend-note">
       <b>节点大小</b> = 共现强度<br>
-      <b>连线粗细</b> = 共同出现的群数<br>
+      <b>灰色连线</b> = 群共现（边上标共同群数）<br>
+      <b>青色连线</b> = 私聊（边上标消息条数）<br>
       <b>同色</b> = 同一个圈子<br><br>
       <b>点击某人</b> → 高亮他的关系圈，淡化无关的人<br>
       <b>点击空白</b> → 取消聚焦<br><br>
@@ -408,6 +461,7 @@ __DATA__
   }));
   const idx={}; nodes.forEach((n,i)=>idx[n.d.person_key]=i);
   const links=G.links.map(l=>({s:idx[l.src],t:idx[l.dst],w:l.weight,
+                               kind:l.kind||'co_group',
                                shared:l.shared_rooms!=null?l.shared_rooms:null}))
                    .filter(l=>l.s!=null&&l.t!=null);
 
@@ -425,8 +479,18 @@ __DATA__
     links.forEach(l=>{const a=nodes[l.s],b=nodes[l.t];
       if(filtering && (a.timeHidden||b.timeHidden)) return;  // 隐藏边的两端不参与
       let dx=b.x-a.x,dy=b.y-a.y;let d=Math.sqrt(dx*dx+dy*dy)||1;
-      // 目标距离随共同群数增加（关系越强靠得越近）
-      const target=70+ (4-Math.min(l.w,4))*26;const f=(d-target)*0.016*Math.min(l.w,4);
+      // 目标距离随关系强度增加（关系越强靠得越近）。
+      // ⚠️ 私聊边的 weight 是「消息条数」（可能上千），不能像群共现那样线性用 ——
+      //    否则一条 2000 条消息的私聊会把两人拉到重合。改用 log 压缩。
+      let target, f;
+      if(l.kind==='direct'){
+        const strength=Math.min(4, Math.log10(1+l.w)*1.6);   // 1~4 档
+        target=60+(4-strength)*22;
+        f=(d-target)*0.014*strength;
+      } else {
+        target=70+ (4-Math.min(l.w,4))*26;
+        f=(d-target)*0.016*Math.min(l.w,4);
+      }
       const ux=dx/d,uy=dy/d;a.vx+=ux*f;a.vy+=uy*f;b.vx-=ux*f;b.vy-=uy*f;});
     act.forEach(a=>{a.vx+=(W/2-a.x)*0.0022;a.vy+=(H/2-a.y)*0.0022;
       a.vx*=0.85;a.vy*=0.85;a.x+=a.vx;a.y+=a.vy;});
@@ -447,11 +511,17 @@ __DATA__
   let focusKey=null;   // 当前聚焦的人
 
   links.forEach(l=>{const a=nodes[l.s],b=nodes[l.t];
+    const isDirect = l.kind==='direct';
     const ln=document.createElementNS(NS,'line');
-    ln.setAttribute('stroke','#39404f');
-    ln.setAttribute('stroke-width',Math.min(1+l.w*0.9,6));
+    // 边色区分关系类型：珊瑚=群共现（圈子），青=私聊（直连）
+    ln.setAttribute('stroke', isDirect? '#4ecdc4' : '#39404f');
+    // 私聊边的权重是消息条数（可能上百）→ 单独压宽度，否则会盖住图
+    const w = isDirect ? Math.min(1+Math.log10(1+l.w)*1.5, 4) : Math.min(1+l.w*0.9,6);
+    ln.setAttribute('stroke-width',w);
     // 密集时压低连线透明度：核心区连线太多会糊成一片灰
-    ln.setAttribute('opacity',DENSE?0.18:Math.min(0.28+l.w*0.16,0.9));
+    const op = isDirect ? Math.min(0.18+Math.log10(1+l.w)*0.14, 0.72)
+                        : (DENSE?0.18:Math.min(0.28+l.w*0.16,0.9));
+    ln.setAttribute('opacity',DENSE?Math.min(op,0.3):op);
     gE.appendChild(ln);l.el=ln;});
 
   // 边标签：共同出现的群数。
@@ -470,7 +540,9 @@ __DATA__
     t.setAttribute('paint-order','stroke');           // 加描边，压在连线上也看得清
     t.setAttribute('stroke','#0f1115');t.setAttribute('stroke-width','3');
     t.setAttribute('stroke-linejoin','round');
-    t.textContent = l.shared!=null && l.shared>0 ? `${l.shared}群` : `${Math.round(l.w)}`;
+    t.textContent = l.kind==='direct'
+      ? (Math.round(l.w)+'条')
+      : (l.shared!=null && l.shared>0 ? `${l.shared}群` : `${Math.round(l.w)}`);
     t.style.pointerEvents='none';
     gT.appendChild(t);l.lbl=t;
   });
@@ -480,9 +552,16 @@ __DATA__
     const t=(n.d.tier||'').toUpperCase();
     // 有社区时按社区着色（更能看出圈子）；否则回落到分层配色
     const comm=n.d.community;
-    c.setAttribute('fill', (comm!==null&&comm!==undefined) ? ccOf(comm)
+    c.setAttribute('fill', n.d.is_self ? '#ffffff'
+                    : (comm!==null&&comm!==undefined) ? ccOf(comm)
                     : (t==='AAA'||t==='AAAA')?'#ff7a6b':t==='AA'?'#4ecdc4':'#8b93a7');
     c.setAttribute('r',n.r);c.setAttribute('opacity','.92');
+    // 「我」是主角：加白边 + 更大半径，图上一眼找到自己
+    if(n.d.is_self){
+      c.setAttribute('stroke','#ff7a6b');c.setAttribute('stroke-width','3');
+      n.r = Math.max(n.r, 16);
+      c.setAttribute('r', n.r);
+    }
     c.style.cursor='pointer';
     c.__n=n;
     gN.appendChild(c);n.el=c;
@@ -544,7 +623,9 @@ __DATA__
     links.forEach(l=>{
       const hidden = timeOn && (nodes[l.s].timeHidden||nodes[l.t].timeHidden);
       l.el.setAttribute('opacity', hidden ? '0' : (l.baseOp!==undefined?l.baseOp:Math.min(0.28+l.w*0.16,0.9)));
-      l.el.setAttribute('stroke','#39404f');
+      // ⚠️ 必须按 kind 还原颜色：direct（私聊）是青色，
+      //    无条件写 #39404f 会把私聊边全染成灰的群共现色。
+      l.el.setAttribute('stroke', l.kind==='direct' ? '#4ecdc4' : '#39404f');
       if(l.lbl)l.lbl.style.opacity= hidden?'0':'1';
     });
     return;
@@ -569,7 +650,11 @@ __DATA__
       const timeHidden = timeOn && (nodes[l.s].timeHidden||nodes[l.t].timeHidden);
       const on = touch && !timeHidden;
       l.el.setAttribute('opacity', on?'.95':(timeHidden?'0':'.12'));
-      l.el.setAttribute('stroke', touch?'#ff7a6b':'#39404f');
+      // 聚焦时：direct 边保持青色（它是「直连关系」的标识），
+      // co_group 边用珊瑚色表示「被点亮的关系圈」
+      l.el.setAttribute('stroke', touch
+        ? (l.kind==='direct' ? '#4ecdc4' : '#ff7a6b')
+        : (l.kind==='direct' ? '#2f6b6a' : '#39404f'));
       if(l.lbl) l.lbl.style.opacity= on?'1':'0';
     });
   }
@@ -821,7 +906,12 @@ __DATA__
     if(!focusKey) return;
     const n=nodes.find(x=>x.d.person_key===focusKey);
     if(!n) return;
-    const nm=String(n.d.display_name||'').replace(/"/g,'');
+    // ⚠️ 分享模式下不能用显示名 —— 那会把真名写进可分享的 HTML。
+    //    改用 person_key（形如 wx:xxx，不含人名，且仍能唯一定位）。
+    const isShared = (G.share===true);
+    const nm = isShared
+      ? String(n.d.person_key||'').replace(/"/g,'')
+      : String(n.d.display_name||'').replace(/"/g,'');
     const cmd='renpu graph3d --person "'+nm+'" --share';
     const tip=document.getElementById('tip');
     const done=(ok)=>{
@@ -868,8 +958,18 @@ def write_graph_html(con, out_path, limit=60, min_weight=1.0, tier=None,
                           focus=focus, share=share)
     if not subtitle:
         st = core.stats(con)
-        subtitle = (f"{st['people']} 人 · {st['edges']} 条关系边 · "
-                    f"{st['rooms']} 个群 · 本地生成，数据不出本机")
+        # ⚠️ 主体数字必须用**图里实际有的**，不要用全库统计：
+        #    全库 21823 人但图只画 60 个，写「21823 人」会让人以为图里有两万多人。
+        n_people = len(graph["nodes"])
+        n_links = len(graph["links"])
+        n_direct = sum(1 for l in graph["links"] if l.get("kind") == "direct")
+        n_group = n_links - n_direct
+        parts = [f"图上 {n_people} 人 · {n_links} 条关系边"]
+        if n_direct:
+            parts.append(f"私聊 {n_direct} · 群共现 {n_group}")
+        parts.append(f"全库 {st['people']} 人 / {st['rooms']} 群")
+        parts.append("本地生成，数据不出本机")
+        subtitle = " · ".join(parts)
     html_text = render_html(graph, title=title, subtitle=subtitle)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)

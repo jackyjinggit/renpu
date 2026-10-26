@@ -41,18 +41,28 @@ def community_color(c):
     return CC[int(c) % len(CC)]
 
 
-def collect_neighbourhood(con, center_key, max_people=36, share=False):
-    """取「中心人 + 其关系邻居」，作为 3D 聚光的节点集。
+def collect_neighbourhood(con, center_key, max_people=36, share=False, depth=2):
+    """取「中心人 + 其关系邻居（可二阶扩展）」，作为 3D 聚光的节点集。
 
     只取真实有关系的人 —— 这是 3D 能成立的前提：
     几十个节点用球面布局，结构清晰；几百个就会糊。
+
+    depth=2（默认）为什么必要（2026-10-26 真实库实测）：
+        真实关系里有一种很常见的情况 —— 某人的关系**全是私聊**，
+        没有和任何人在群里共现过。这时只看直接邻居，
+        3D 圈里只有「中心 + 1 个私聊对象」两个点，视觉上毫无意义
+        （实测：中心人 1927 条私聊，3D 圈只有 2 个点）。
+        扩到二阶后能看出「我 → 中心人 → 中心的群共现邻居」的结构。
+        depth=1 则只保留直接邻居。
     """
+    # ── 一阶：直接邻居 ──
     rows = con.execute(
         "SELECT src, dst, weight FROM edge "
         "WHERE src=? OR dst=? ORDER BY weight DESC LIMIT 600",
         (center_key, center_key)).fetchall()
     seen = set()
     order = []
+    first_hop = set()
     for r in rows:
         a, b = r["src"], r["dst"]
         other = b if a == center_key else a
@@ -60,10 +70,32 @@ def collect_neighbourhood(con, center_key, max_people=36, share=False):
             continue
         seen.add(other)
         order.append(other)
+        first_hop.add(other)
+
+    # ── 二阶：邻居的邻居（按强度补齐，让结构显形）──
+    # ⚠️ 不能拿 'me' 当中间跳板：'me' 有几百条私聊边，
+    #    拿它扩展会把「我」的整个社交网络塞进来，淹没中心人物。
+    #    扩展只从「中心人的群共现邻居」往外走 —— 那才是中心人的关系圈。
+    if depth >= 2 and first_hop:
+        hops = [h for h in list(first_hop) if h != "me"][:40]
+        if hops:
+            ph = ",".join("?" * len(hops))
+            rows2 = con.execute(
+                f"SELECT src, dst, weight FROM edge WHERE src IN ({ph}) OR dst IN ({ph}) "
+                f"ORDER BY weight DESC LIMIT 2000", hops + hops).fetchall()
+            for r in rows2:
+                a, b = r["src"], r["dst"]
+                for other in (a, b):
+                    if other in (center_key, "me"):
+                        continue
+                    if other in seen:
+                        continue
+                    seen.add(other)
+                    order.append(other)
 
     keys = [center_key] + order[:max_people - 1]
     if not keys:
-        return {"nodes": [], "links": [], "center": None}
+        return {"nodes": [], "links": [], "rooms": [], "center": None}
 
     ph = ",".join("?" * len(keys))
     people = [dict(r) for r in con.execute(
@@ -76,12 +108,17 @@ def collect_neighbourhood(con, center_key, max_people=36, share=False):
     kset = set(keys)
     uniq = {}
     for r in con.execute(
-        f"SELECT src, dst, weight FROM edge WHERE src IN ({ph}) AND dst IN ({ph})",
+        f"SELECT src, dst, weight, kind FROM edge WHERE src IN ({ph}) AND dst IN ({ph})",
         keys + keys).fetchall():
         if r["src"] in kset and r["dst"] in kset and r["src"] != r["dst"]:
-            pair = tuple(sorted((r["src"], r["dst"])))
-            uniq[pair] = max(uniq.get(pair, 0), r["weight"])
-    links = [{"src": a, "dst": b, "weight": w} for (a, b), w in uniq.items()]
+            # ⚠️ 去重键必须带 kind：co_group（群共现）与 direct（私聊）是不同的边，
+            #    只按 (src,dst) 去重会因 direct 权重大而把群共现边整条挤掉。
+            pair = (r["src"], r["dst"], r["kind"])
+            prev = uniq.get(pair)
+            if prev is None or r["weight"] > prev[0]:
+                uniq[pair] = (r["weight"], r["kind"])
+    links = [{"src": a, "dst": b, "weight": w, "kind": kd}
+             for (a, b, kd), (w, _kk) in uniq.items()]
 
     # 这些人共同出现的群（用于头部统计）
     rooms = [dict(r) for r in con.execute(
@@ -101,13 +138,38 @@ def collect_neighbourhood(con, center_key, max_people=36, share=False):
             "msg_total": p["msg_total"],
             "community": None,
             "is_center": i == 0,
+            "is_self": p["person_key"] == "me",
         })
     if share:
+        # 分享模式：人名与 person_key 都要脱敏
+        # （🔴 2026-10-26 真实库实测发现这是漏洞：
+        #   原实现只清了 tier/circle/role/msg_total 和群名，
+        #   **中心人物的真名原样出现在 HTML 里**（实测明文可见），
+        #   person_key（wx:xxx）同样敏感 —— 它就是能加好友的稳定标识。
+        #   规则：中心人物 → 「当事人」；'me' → 「我」；其他人 → 「关系人 N」
+        label_of, key_of = {}, {}
+        ordered_nodes = sorted(nodes, key=lambda x: x["person_key"])
+        for i, n in enumerate(ordered_nodes, 1):
+            pk = n["person_key"]
+            if n["is_center"]:
+                label_of[pk] = "当事人"
+                key_of[pk] = "center"
+            elif pk == "me":
+                label_of[pk] = "我"
+                key_of[pk] = "me"
+            else:
+                label_of[pk] = f"关系人 {i}"
+                key_of[pk] = f"p{i}"
         for n in nodes:
+            n["display_name"] = label_of.get(n["person_key"], "关系人")
+            n["person_key"] = key_of.get(n["person_key"], "p?")
             n["tier"] = None
             n["circle"] = None
             n["role"] = None
             n["msg_total"] = None
+        for l in links:
+            l["src"] = key_of.get(l["src"], l["src"])
+            l["dst"] = key_of.get(l["dst"], l["dst"])
         for r in rooms:
             r["name"] = "群（已脱敏）"
     return {"nodes": nodes, "links": links, "rooms": rooms, "center": center_key}
@@ -225,7 +287,7 @@ for(let i=0;i<N;i++){
   nodes[i].z=z*rad*0.60;
 }
 const byKey={}; nodes.forEach(n=>byKey[n.person_key]=n);
-const links=D.links.map(l=>({a:byKey[l.src],b:byKey[l.dst],w:l.weight}))
+const links=D.links.map(l=>({a:byKey[l.src],b:byKey[l.dst],w:l.weight,kind:l.kind||'co_group'}))
                    .filter(l=>l.a&&l.b);
 
 // ── 相机（手写透视投影） ──
@@ -268,8 +330,10 @@ function render(){
 
   // ── 连线 ──
   gE.textContent='';
-  const ranked=links.slice().sort((a,b)=>b.w-a.w);
-  const top=new Set(ranked.slice(0, Math.min(14, ranked.length)));
+  // 高亮候选：优先群共现边（私聊边权重是消息条数，会把 top 全占满）
+  const ranked=links.slice()
+      .sort((a,b)=> (a.kind==='direct'?-1:1)-(b.kind==='direct'?-1:1) || b.w-a.w);
+  const top=new Set(ranked.filter(l=>l.kind!=='direct').slice(0, 14));
   links.forEach(l=>{
     const a=l.a,b=l.b;
     const ln=document.createElementNS(NS,'line');
@@ -279,9 +343,14 @@ function render(){
     // 只有「最粗的前 N 条」用珊瑚色高亮（真正的核心关系），其余一律灰淡。
     // 否则枢纽节点的 372 条边会全部染红，织成一张网盖住节点。
     const isTop=top.has(l);
-    ln.setAttribute('stroke', isTop? '#ff7a6b' : '#39404f');
-    ln.setAttribute('stroke-width', isTop? Math.max(1.2, Math.min(2.8, l.w*0.4))
-                                          : Math.max(0.4, Math.min(1.4, l.w*0.26)));
+    // 私聊（direct）= 青；群共现 = 灰。top 高亮只作用于群共现边，
+    // 否则枢纽节点的 hundreds 条边会织成一张网盖住节点。
+    const isDirect = l.kind==='direct';
+    ln.setAttribute('stroke', isDirect ? '#4ecdc4' : (isTop? '#ff7a6b' : '#39404f'));
+    ln.setAttribute('stroke-width', isDirect
+      ? Math.max(0.8, Math.min(2.4, Math.log10(1+l.w)*1.1))
+      : (isTop? Math.max(1.2, Math.min(2.8, l.w*0.4))
+              : Math.max(0.4, Math.min(1.4, l.w*0.26))));
     ln.setAttribute('opacity', isTop? Math.max(0.30, Math.min(0.85, near))
                                     : Math.max(0.03, Math.min(0.24, 0.05+l.w*0.035)*near));
     ln.setAttribute('stroke-linecap','round');
@@ -295,7 +364,7 @@ function render(){
     const g=document.createElementNS(NS,'g');
     const c=document.createElementNS(NS,'circle');
     c.setAttribute('cx',n._sx); c.setAttribute('cy',n._sy); c.setAttribute('r',n._r);
-    c.setAttribute('fill', n.is_center? '#ff7a6b' : '#4ecdc4');
+    c.setAttribute('fill', n.is_center? '#ff7a6b' : (n.is_self? '#ffffff' : '#4ecdc4'));
     c.setAttribute('opacity', Math.max(0.22, Math.min(1, 0.35+0.65*n._depth)));
     if(n.is_center){ c.setAttribute('stroke','#ffffff'); c.setAttribute('stroke-width','2'); }
     c.style.cursor='pointer';
@@ -437,8 +506,15 @@ def write_graph_3d(con, out_path, center_key=None, limit=36, share=False):
         if not center_key:
             raise ValueError(f"库里找不到这个人：{who}")
     if not center_key:
+        # 默认选**群共现边最多**的人 —— 3D 圈的价值在于看「圈子结构」，
+        # 而 direct（私聊）边的权重是消息条数（动辄上千），
+        # 按总边数选会永远选到「我」或某个私聊最多的人，结构反而看不到。
         row = con.execute(
-            "SELECT src FROM edge GROUP BY src ORDER BY COUNT(*) DESC LIMIT 1").fetchone()
+            "SELECT src FROM edge WHERE kind='co_group' "
+            "GROUP BY src ORDER BY COUNT(*) DESC LIMIT 1").fetchone()
+        if not row:
+            row = con.execute(
+                "SELECT src FROM edge GROUP BY src ORDER BY COUNT(*) DESC LIMIT 1").fetchone()
         if not row:
             raise ValueError("库里没有关系边，无法生成 3D 视图")
         center_key = row[0]
@@ -454,7 +530,20 @@ def write_graph_3d(con, out_path, center_key=None, limit=36, share=False):
            f"数据在本机生成，不出本机")
 
     nbr = [n for n in g["nodes"] if not n["is_center"]]
-    lines = [f"<b>{center_name}</b> 在你的圈子里有 <b>{len(nbr)}</b> 个直接关系人。", ""]
+    # 关系类型统计：私聊 vs 群共现 —— 这两类关系的信息量完全不同
+    n_direct = sum(1 for l in g["links"] if l.get("kind") == "direct")
+    n_group = len(g["links"]) - n_direct
+    lines = [f"<b>{center_name}</b> 在你的圈子里有 <b>{len(nbr)}</b> 个关系人。", ""]
+    if n_direct or n_group:
+        lines.append(f"其中 私聊 {n_direct} 条 · 群共现 {n_group} 条")
+        lines.append("")
+    # 降级提示：关系人太少时说清原因，而不是给一个空球让人以为数据丢了
+    if len(nbr) <= 2:
+        lines.append("<b>说明</b>")
+        lines.append("此人在你的数据里<b>只与你私聊</b>，没有和任何人在群里共现过。")
+        lines.append("所以关系圈只有你和他 —— 这是数据的真实情况，不是数据缺失。")
+        lines.append("")
+        lines.append("想看有结构的圈，换个<b>群共现多</b>的人试试（比如图谱里点一个多圈子的人）。")
     strong = [n for n in nbr if (n.get("msg_total") or 0) > 0]
     if strong:
         lines.append("聊得最多的几个：")

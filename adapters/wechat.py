@@ -24,6 +24,11 @@ EXCLUDE_PREFIX = ("gh_", "@openim", "fake_", "qqmail", "filehelper", "weixin", "
 EXCLUDE_EXACT = {"qmessage", "notifymessage", "floatbottle", "medianote", "qmsg"}
 SERVICE_WORDS = ("服务号", "团队", "助手", "客服", "通知", "提醒", "公众号", "小程序")
 
+# 私聊关系边的最低消息数：一条消息不算关系（可能只是问路）
+DIRECT_MIN_MESSAGES = 10
+# 私聊强度分档（消息条数）
+DIRECT_TIERS = ((200, "强"), (50, "中"), (0, "弱"))
+
 
 def latest_fresh() -> Path:
     """取最新解密快照。
@@ -345,6 +350,37 @@ def ingest(days: int = 90, fresh: Path = None, progress=print):
                 if edges > 200000:
                     break
     grm.commit()
+
+    # ── 私聊 → 关系边（direct） ──
+    # 为什么必须加这一类（2026-10-26 真实库实测）：
+    #   群共现只能反映「一起在群里出现过」，
+    #   但**私聊密集的人往往是最重要的人** —— 实测本地库里
+    #   971 个有消息的联系人中 686 个（70%）零关系，
+    #   包括聊了近两千条私信的核心联系人。
+    #   也就是说：仁谱号称「人脉的谱系」，却对七成联系人视而不见。
+    #
+    # 阈值：单条消息不算关系（可能只是问路）。
+    #   10 条 = 弱关系（一面之缘到偶尔聊）
+    #   50 条 = 中关系
+    #   200 条 = 强关系
+    #   weight 用消息条数本身（数值可比较、可再分档）
+    progress("… 推导私聊关系边")
+    direct_edges = 0
+    for r in grm.execute(
+            "SELECT conv_key, COUNT(*) c FROM msg_index "
+            "WHERE conv_key LIKE 'wx:%' AND ts > ? GROUP BY conv_key "
+            "HAVING c >= ?", (started - days * 86400, DIRECT_MIN_MESSAGES)).fetchall():
+        other = r["conv_key"]          # conv_key 形如 wx:<对方 person_key>
+        if other == "wx:me":
+            continue
+        n = r["c"]
+        # 双向建边：我↔对方。图上按 person_key 排序存，避免 A→B / B→A 两份
+        a, b = ("me", other) if "me" < other else (other, "me")
+        core.add_edge(grm, a, b, "direct", float(n), None,
+                      note=f"私聊 {n} 条", accumulate=False)
+        direct_edges += 1
+    grm.commit()
+    edges += direct_edges
 
     # ── 审计 ──
     grm.execute(

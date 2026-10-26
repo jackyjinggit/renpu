@@ -228,6 +228,75 @@ def main():
     assert not orphan, f"edge.rooms 里有对不上 room 表的群 key：{list(orphan)[:3]}"
     print(f"  ✅ room_key 口径一致：{len(edge_rooms)} 个群全部对得上")
 
+    # 8c2. 分享模式必须脱敏**人名**（2026-10-26 真实库实测发现这是漏洞：
+    #      原实现只清了群名/统计数字，人名与 person_key 原样保留）
+    import json as _json
+    import re as _re
+
+    def _data_values(html, sid):
+        m = _re.search(rf"""<script[^>]*id=['\"]{sid}['\"][^>]*>(.*?)</script>""",
+                       html, _re.S)
+        if not m:
+            return None
+        try:
+            d = _json.loads(m.group(1).replace("<\/", "</"))
+        except Exception:
+            return None
+        out = set()
+
+        def _walk(o):
+            if isinstance(o, dict):
+                for v in o.values():
+                    _walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    _walk(v)
+            elif isinstance(o, str):
+                out.add(o.strip())
+        _walk(d)
+        return out
+
+    # 收集库里所有「像人名」的字符串
+    cand = set()
+    for (nm,) in con.execute("SELECT display_name FROM person").fetchall():
+        nm = (nm or "").strip()
+        if len(nm) >= 2 and sum(1 for c in nm if ord(c) > 0x2E80) >= 2:
+            cand.add(nm)
+    for r in con.execute("SELECT alias, nickname, remark FROM identity").fetchall():
+        for v in r:
+            v = (v or "").strip()
+            if len(v) >= 2 and sum(1 for c in v if ord(c) > 0x2E80) >= 2:
+                cand.add(v)
+
+    # 2D 图：分享模式
+    import render
+    import render3d
+    gpath, gg = render.write_graph_html(con, TEST_HOME / "g_share.html",
+                                        limit=20, share=True)
+    gvals = _data_values(Path(gpath).read_text(encoding="utf-8"), "graph-data")
+    assert gvals is not None, "2D 图找不到数据区"
+    leak = sorted({n for n in cand if n in gvals})
+    assert not leak, f"2D 分享模式泄漏人名：{leak[:5]}"
+    ghtml = Path(gpath).read_text(encoding="utf-8")
+    assert "wxid_" not in ghtml, "2D 分享模式泄漏 wxid"
+    for n in gg["nodes"]:
+        assert n["display_name"].startswith(("关系人", "我")),             f"2D 分享模式节点名没脱敏：{n['display_name']}"
+        assert not str(n["person_key"]).startswith("wx:"),             f"2D 分享模式 person_key 没脱敏：{n['person_key']}"
+    print(f"  ✅ 2D 分享脱敏：{len(cand)} 个候选名命中 0 / 节点名与 key 全脱敏")
+
+    # 3D 圈：分享模式
+    tpath, tg = render3d.write_graph_3d(con, TEST_HOME / "g3d_share.html",
+                                         limit=12, share=True)
+    tvals = _data_values(Path(tpath).read_text(encoding="utf-8"), "g3d")
+    assert tvals is not None, "3D 圈找不到数据区"
+    leak3 = sorted({n for n in cand if n in tvals})
+    assert not leak3, f"3D 分享模式泄漏人名：{leak3[:5]}"
+    thtml = Path(tpath).read_text(encoding="utf-8")
+    assert "wxid_" not in thtml, "3D 分享模式泄漏 wxid"
+    for n in tg["nodes"]:
+        assert n["display_name"].startswith(("当事人", "关系人", "我")),             f"3D 分享模式节点名没脱敏：{n['display_name']}"
+    print(f"  ✅ 3D 分享脱敏：命中 0 / 节点名与 key 全脱敏")
+
     # 8d. 人物档案页：单文件、零外链、分享模式脱敏
     import render_profile
     prof_path, prof = render_profile.render_profile(con, "林夏",
