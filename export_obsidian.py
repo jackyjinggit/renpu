@@ -428,8 +428,103 @@ def export_vault(con, out_dir, limit=120, min_messages=20, share=True, subdir="�
     (out / subdir / "索引.md").write_text("\n".join(idx), encoding="utf-8")
     written += 1
 
+    # ── 使用说明：告诉用户装什么插件、怎么开图谱 ──
+    # 为什么单独写一个 README（2026-10-26 实测）：
+    #   仁谱**不应该**往用户的 vault 里塞第三方插件 ——
+    #   Obsidian 见到带插件的仓库会弹「你能否信任这个仓库」的警告，
+    #   用户得自己点「信任并启用插件」。所以这里只给**建议**，
+    #   装不装、信任不信任，由用户决定。
+    _write_readme(out, vr_summary={
+        "people": len(people), "rooms": len(rooms), "links": len(links),
+        "files": written})
+
+    # ── Obsidian 颜色分组：让图谱打开就按圈分色 ──
+    # 为什么要写这个（2026-10-26 实测）：
+    #   Obsidian 的 graph.json 里 colorGroups 默认是空的 → 全部节点同色 →
+    #   486 篇旧笔记 + 137 篇人脉笔记混成一坨，看不出圈子。
+    #   颜色分组的 query 走的是 Obsidian 的 search 语法（"tag:#群/xxx"），
+    #   所以只要把群里最多的几个圈写成分组，图谱立刻按圈着色。
+    _write_color_groups(out, rooms, share)
+
     return {"out_dir": str(out), "people": len(people), "rooms": len(rooms),
             "links": len(links), "files": written}
+
+
+def _write_readme(out: Path, vr_summary):
+    """写一份「怎么用这个 vault」的说明（放在 vault 根）。"""
+    txt = f"""# 人脉谱系 · Obsidian vault
+
+这是**仁谱**从你本地微信数据生成的人脉库。{vr_summary['people']} 人 · {vr_summary['rooms']} 群 · {vr_summary['links']} 条关系边。
+
+## 怎么看
+
+**方式一 · Obsidian 自带图谱**（开箱即用，无需插件）
+左侧栏点那个像结绳的图标（关系图谱），或命令面板搜「关系图谱」。
+节点已经按圈分好色了 —— 同一个群的人同色。
+
+**方式二 · 社区插件（更强）**
+在「设置 → 第三方插件」里装这几个（社区插件市场搜）：
+
+- **3D Graph** —— 三维力导向图谱，滚轮缩放，能看深度
+- **Breadcrumbs** —— 侧栏面包屑，看「这个人属于哪些圈」
+- **Smart Connections** —— 语义检索，直接问「谁跟我聊过类似的事」
+
+> 仁谱**没有**替你装这些插件 —— 装不装、信任不信任，由你决定。
+
+## 数据说明
+
+- 每个人一篇笔记，正文里写着「跟谁在哪些群里共现」「聊了多少条」「有哪些承诺」
+- 群单独一篇，成员列表即入口（人 → 群 → 人，两跳可达）
+- frontmatter 存了层级、圈层、消息数、首次与最后出现时间
+- 正文里的 `#群/xxx`、`#关系/私聊` 是标签，图谱按它分色
+
+## 隐私
+
+默认导出是**脱敏**的：真名换成「关系人 N」，群名换成「群 N」。
+要写真名导出，加 `--no-share`（谨慎：那份文件不能随便发人）。
+"""
+    (out / "人脉谱系.md").write_text(txt, encoding="utf-8")
+    return True
+
+
+def _write_color_groups(out: Path, rooms, share, top_n=10):
+    """写 .obsidian/graph.json 的颜色分组（按群分色）。
+
+    注意：只在**独立 vault**（out 自己就是 vault 根）时写 ——
+    往已有 vault 里塞 graph.json 会覆盖用户自己的分组设置。
+    """
+    obs = out / ".obsidian"
+    if obs.exists() and any(obs.iterdir()):
+        return False          # 已有 .obsidian 配置 → 不碰
+    # 人脉笔记放在 subdir 下 → tag 查询要带路径前缀吗？
+    # Obsidian 的 tag 查询是全局的（tag:#群/1），不需要路径。
+    counts = {}
+    for rm in rooms:
+        counts[rm["name"]] = rm["mine"]
+    top = sorted(counts.items(), key=lambda kv: -kv[1])[:top_n]
+    palette = ["#ff7a6b", "#4ecdc4", "#ffd166", "#a78bfa", "#7dd3fc",
+               "#f472b6", "#86efac", "#fb923c", "#c4b5fd", "#67e8f9"]
+    groups = []
+    for i, (name, _n) in enumerate(top):
+        tag = str(name).replace(" ", "-").replace("#", "")
+        groups.append({
+            "query": f"tag:#群/{tag}",
+            "color": {"a": 1, "rgb": int(palette[i % len(palette)][1:], 16)},
+        })
+    # 「我」单独一组 —— 它是中心
+    groups.insert(0, {"query": "path:我", "color": {"a": 1, "rgb": 0xFFFFFF}})
+    obs.mkdir(parents=True, exist_ok=True)
+    (obs / "graph.json").write_text(json.dumps({
+        "collapse-filter": False, "search": "", "showTags": True,
+        "showAttachments": True, "hideUnresolved": False, "showOrphans": True,
+        "collapse-color-groups": True, "colorGroups": groups,
+        "collapse-display": True, "showArrow": False,
+        "textFadeMultiplier": 0, "nodeSizeMultiplier": 1, "lineSizeMultiplier": 1,
+        "collapse-forces": True, "centerStrength": 0.5,
+        "repelStrength": 10, "linkStrength": 1, "linkDistance": 250,
+        "scale": 1, "close": False,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True
 
 
 if __name__ == "__main__":
