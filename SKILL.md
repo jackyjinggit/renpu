@@ -69,7 +69,18 @@ curl "http://127.0.0.1:8877/api/edges?limit=20"
 curl -X POST http://127.0.0.1:8877/api/note \
      -d '{"text":"他答应引荐XX","name":"张三","kind":"promise"}'
 ```
-端点全表：`stats | people | who | search | feed | rooms | edges | todos`，POST：`/api/note`、`/api/todo/close`。
+端点全表（GET）：`stats | people | who | search | feed | rooms | edges | todos | profile | graph | graph3d | timeline | endpoints`
+POST：`/api/note`、`/api/todo/close`。
+
+新端点说明：
+- `/api/profile?name=xxx` → 单人档案的结构化数据（不返回 HTML）
+- `/api/graph?limit=60&format=json|path` → 关系图谱数据或 HTML 路径
+- `/api/graph3d?person=xxx&format=json|path` → 3D 关系圈数据或 HTML 路径
+- `/api/timeline?person=&days=90` → 消息量按天聚合
+- `/api/endpoints` → 端点自发现清单
+
+**默认 share=1（脱敏）**：`profile` / `graph` / `graph3d` 三个端点默认返回脱敏数据
+（人名 → 「关系人 N」、person_key → 假 key）。要原始数据显式加 `share=0`。
 
 ## 写回纪律（结论要落库，不要只在对话里说）
 

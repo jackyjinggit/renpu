@@ -297,6 +297,25 @@ def main():
         assert n["display_name"].startswith(("当事人", "关系人", "我")),             f"3D 分享模式节点名没脱敏：{n['display_name']}"
     print(f"  ✅ 3D 分享脱敏：命中 0 / 节点名与 key 全脱敏")
 
+    # 8c3. API 端点：脱敏响应 + key 唯一 + 错误路径
+    import server as _server
+    for fn, args in ((_server.api_graph, (con, 8, True, "json")),
+                     (_server.api_graph3d, (con, "顾南舟", 12, True, "json")),
+                     (_server.api_profile, (con, "顾南舟", True)),
+                     (_server.api_timeline, (con, "", 30))):
+        out = fn(*args)
+        _vals = _server._string_values(out)
+        _leak = sorted({n for n in cand if n in _vals})
+        assert not _leak, f"API 响应泄漏人名（{fn.__name__}）：{_leak[:5]}"
+    _g = _server.api_graph(con, 8, True, "json")
+    _ks = [n.get("person_key") for n in _g.get("nodes") or []]
+    assert len(_ks) == len(set(_ks)),         f"API 脱敏后 person_key 不唯一：{len(_ks)} 个节点只有 {len(set(_ks))} 个 key"
+    _g3 = _server.api_graph3d(con, "顾南舟", 12, True, "json")
+    assert _g3.get("nodes"), "API graph3d 返回空节点"
+    _pr = _server.api_profile(con, "不存在的人xyz", True)
+    assert _pr.get("found") is False, "API 对不存在的人应返回 found=false"
+    print("  ✅ API：脱敏命中 0 / key 唯一 / 3D 非空 / 错误路径正确")
+
     # 8d. 人物档案页：单文件、零外链、分享模式脱敏
     import render_profile
     prof_path, prof = render_profile.render_profile(con, "林夏",

@@ -177,6 +177,23 @@ FTS 仍为 0 时回退 `LIKE` —— 保证「搜得到」永远成立。
 
 **数据主权**：默认只连**演示库**；接真实微信必须用户显式填 `db_storage` 目录，程序不自动读。
 
+## Agent 接入（本地 API）
+
+绑 `127.0.0.1`，只在本机。15 个 GET 端点 + 2 个 POST。
+
+```bash
+renpu serve --port 8877
+curl http://127.0.0.1:8877/api/endpoints      # 端点自发现
+curl "http://127.0.0.1:8877/api/profile?name=xxx"  # 单人档案（结构化）
+curl "http://127.0.0.1:8877/api/graph?limit=60"    # 关系图谱数据
+curl "http://127.0.0.1:8877/api/graph3d?person=xxx" # 3D 关系圈数据
+curl "http://127.0.0.1:8877/api/timeline?days=90"   # 消息量按天聚合
+```
+
+**默认脱敏**：`profile` / `graph` / `graph3d` 默认 `share=1`（人名换成「关系人 N」、
+person_key 换成假 key），要原始数据显式 `share=0`。响应出厂前会过一道 PII 闸，
+命中任何真实姓名就拒绝对外返回。
+
 ## 命令全表
 
 ```text
