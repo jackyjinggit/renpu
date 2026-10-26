@@ -134,6 +134,28 @@ def resolve_person(con, who):
 
 # ───────────────────────── 脱敏：姓名映射 ─────────────────────────
 
+def _is_name_like(nm) -> bool:
+    """这个字符串像「名字」吗？—— 决定它该不该进脱敏映射表。
+
+    为什么需要这个判定（2026-10-26 真实数据实测）：
+        真实库里有一批 display_name 是**纯数字**（'7'、'11'、'123'…）——
+        那是微信群里没设昵称的成员占位。如果把它们当人名放进映射表，
+        脱敏会把页面里的日期、消息数、计数全替换掉；
+        更糟的是「脱敏校验」会把页面上出现的数字当成真名泄漏而报错
+        （实测报「页面里仍出现真实姓名 01、10、11、137、17、19」）。
+
+    判定：至少 2 个字符，且**不能是纯数字/纯符号**。
+    纯数字不是身份标识，遮它反而破坏信息。
+    """
+    s = str(nm).strip()
+    if len(s) < 2:
+        return False
+    # 纯数字 / 纯符号（含小数点、负号这类可能的计数）→ 不算名字
+    if not any(ch.isalpha() or ord(ch) > 0x2E80 for ch in s):
+        return False
+    return True
+
+
 def _build_namemap(con, center_key):
     """收集库里所有可能泄露身份的字符串，映射成脱敏标签。
 
@@ -162,7 +184,7 @@ def _build_namemap(con, center_key):
             continue
         lb = key_label[pk]
         for nm in (p["display_name"], p["real_name"]):
-            if nm and len(str(nm).strip()) >= 2:
+            if nm and _is_name_like(nm):
                 label.setdefault(str(nm), lb)
     # 身份表里还藏着别名 / 昵称 / 备注 / 平台 ID —— 一样是身份信息
     for i in con.execute(
@@ -172,15 +194,15 @@ def _build_namemap(con, center_key):
             continue
         lb = key_label.get(pk, SHARE_OTHER)
         for nm in (i["alias"], i["nickname"], i["remark"], i["channel_id"]):
-            if nm and len(str(nm).strip()) >= 2:
+            if nm and _is_name_like(nm):
                 label.setdefault(str(nm), lb)
     # 中心人物优先（后写入的强制覆盖成「当事人」）
     for p in people:
         if p["person_key"] == center_key:
             for nm in (p["display_name"], p["real_name"]):
-                if nm and len(str(nm).strip()) >= 2:
+                if nm and _is_name_like(nm):
                     label[str(nm)] = SHARE_CENTER
-    items = [(k, v) for k, v in label.items() if len(k) >= 2]
+    items = [(k, v) for k, v in label.items() if _is_name_like(k)]
     items.sort(key=lambda kv: -len(kv[0]))
     return items, key_label
 
@@ -804,17 +826,90 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 
 # ───────────────────────── 渲染入口 ─────────────────────────
 
+def _visible_text(html_text: str) -> str:
+    """抽出页面的**可见文本**（剥掉标签、style、script、注释）。
+
+    用途：脱敏校验只该看「观众看得见的内容」。
+    如果拿原始 HTML 去子串匹配，CSS 类名、JS 变量名、HTML 标签名
+    都会造成误判（实测把 'circle'、'Re'、'chips' 当成真名泄漏）。
+    """
+    import re
+    s = re.sub(r"(?is)<!--.*?-->", " ", html_text)
+    s = re.sub(r"(?is)<script\b.*?</script>", " ", s)
+    s = re.sub(r"(?is)<style\b.*?</style>", " ", s)
+    s = re.sub(r"(?is)<[^>]+>", " ", s)
+    # 属性里也可能藏名字（alt=、title=、data-*）——这些观众看不到，但也不该有真名
+    s = re.sub(r"(?s)\s+", " ", s)
+    return s
+
+
 def _assert_no_leak(html_text, namemap):
-    """分享模式最后一道闸：整页扫一遍，出现任何真实姓名就直接抛错。
+    """分享模式最后一道闸：出现任何真实姓名就直接抛错。
 
     宁可不出文件，也不让 PII 漏出去 —— 静默通过比报错危险得多。
+
+    校验方式：**解析数据区的 JSON，逐个字符串值做精确比对**。
+    不能用「子串包含」（2026-10-26 真实数据实测连踩三次）：
+      1. 扫整页原始 HTML → CSS 类名、JS 变量、标签名全被判成真名
+         （实测报 circle、Re、am、an、as、cat、chips）
+      2. 扫整页可见文本 → 固定 UI 文案被判成真名
+         （实测报「人物」「承诺」「时间」—— 恰好真有人叫这些）
+      3. 扫数据区子串 → JSON 的**键名**和英文文本的子串被判成真名
+         （实测报 circle、cl、he、li、am —— 全部来自 "circle": null
+          这种字段名，以及 the/li 之类的普通英文词）
+    精确比对每个「值」才是对的：值是数据，键名是结构。
     """
     if not namemap:
         return
-    body = html_text.replace(_CSS, "").replace(_JS, "")
-    hits = sorted({nm for nm, _ in namemap if nm and nm in body})
+    values = _data_values(html_text)
+    if values is None:
+        # 解析不出来 → 退回全量子串检查，宁可多查不可漏查
+        body = _visible_text(html_text)
+        hits = {str(nm).strip() for nm, _ in namemap
+                if nm and str(nm).strip() in body and _is_name_like(nm)}
+        if hits:
+            raise ValueError("脱敏校验失败：页面仍出现真实姓名 " + "、".join(sorted(hits)[:6]))
+        return
+
+    names = {str(nm).strip() for nm, _ in namemap if nm and _is_name_like(nm)}
+    hits = names & values
     if hits:
-        raise ValueError("脱敏校验失败：页面里仍出现真实姓名 " + "、".join(hits[:6]))
+        raise ValueError("脱敏校验失败：数据区仍出现真实姓名 " + "、".join(sorted(hits)[:6]))
+
+
+def _data_values(html_text):
+    """取出数据区 JSON 里所有字符串值（精确值集合）。解析失败返回 None。"""
+    import json
+    import re
+    m = re.search(r"(?is)<script[^>]*id=['\"]profile-data['\"][^>]*>(.*?)</script>",
+                  html_text)
+    if not m:
+        return None
+    raw = m.group(1).replace("<\\/", "</")
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    out = set()
+
+    def walk(o):
+        if isinstance(o, dict):
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+        elif isinstance(o, str):
+            out.add(o.strip())
+            # 长文本里如果整段就是某个名字，也要算命中
+            for part in o.split():
+                if part:
+                    out.add(part.strip(".,;:!?，。；：！？、()（）[]【】\"'"))
+        elif o is not None:
+            out.add(str(o))
+
+    walk(data)
+    return out
 
 
 def render_profile(con, who, out_path, share=False) -> tuple[str, dict]:
