@@ -194,6 +194,26 @@ curl "http://127.0.0.1:8877/api/timeline?days=90"   # 消息量按天聚合
 person_key 换成假 key），要原始数据显式 `share=0`。响应出厂前会过一道 PII 闸，
 命中任何真实姓名就拒绝对外返回。
 
+## 导出到 Obsidian（推荐用法）
+
+```bash
+renpu export-vault --limit 120 --min-messages 20
+```
+
+把人脉导成一个 **Obsidian vault**：每个人一篇笔记、每个群一篇、互相双链。
+
+**为什么这是推荐用法**：Obsidian 有成熟的图谱与导航生态（3d-graph / breadcrumbs /
+smart-connections 都吃 vault 里的 markdown + 双链）。仁谱负责解密微信、建模关系、
+生成笔记；渲染与导航交给现成的社区插件。仁谱自己的 GUI 与 HTML 视图降级为**可选的
+独立视图**，不再是唯一入口。
+
+导出的笔记带 frontmatter（层级 / 圈层 / 消息数 / 首末出现）与 `#tag`
+（`#关系/私聊`、`#关系/群共现`、`#群/<群名>`），所以图谱插件能**按标签分色** ——
+同一个群的人自动同色，一眼看出谁跟谁一伙的。
+
+默认脱敏（人名 → `关系人 N`、群名 → `群 N`）；要写真名加 `--no-share`。
+GUI 里在「数据与设置 → 导出到 Obsidian」点一下即可。
+
 ## 命令全表
 
 ```text

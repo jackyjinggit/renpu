@@ -336,6 +336,37 @@ def main():
     assert _server._is_name_like("林夏"), "正常中文名没被识别"
     print("  ✅ API：脱敏命中 0 / key 唯一 / 3D 非空 / 错误路径正确 / 系统标识不误判")
 
+    # 8c4. Obsidian vault 导出：节点/边/双链/标签 + 断链 0 + 脱敏
+    import export_obsidian
+    import re as _re2
+    vault_dir = TEST_HOME / "vault"
+    vr = export_obsidian.export_vault(con, vault_dir, limit=30,
+                                      min_messages=1, share=True)
+    assert vr["people"] > 0, "vault 导出没有人"
+    assert vr["links"] > 0, "vault 导出没有关系边"
+    vfiles = list(vault_dir.rglob("*.md"))
+    assert len(vfiles) >= vr["people"], "vault 笔记数少于人数"
+    vnames = {f.stem for f in vfiles}
+    broken = []
+    for f in vfiles:
+        for m in _re2.finditer(r"\[\[([^\]|#]+)", f.read_text(encoding="utf-8")):
+            if m.group(1).strip() not in vnames:
+                broken.append((f.stem, m.group(1).strip()))
+    assert not broken, f"vault 有断链：{broken[:4]}"
+    # Obsidian 的 tag 规则：#tag 不能含空格
+    tagre = _re2.compile(r"(?:^|\s)#([^\s#\[\]]+)")
+    tag_count = 0
+    for f in vfiles:
+        tag_count += len(list(tagre.finditer(f.read_text(encoding="utf-8"))))
+    assert tag_count > 0, "vault 笔记里没有 #tag（图谱插件靠 tag 分色）"
+    # 脱敏：vault 里不能出现真名或群名
+    vtext = "\n".join(f.read_text(encoding="utf-8") for f in vfiles)
+    vleak = sorted({n for n in cand if n in vtext})
+    assert not vleak, f"vault 泄漏真名：{vleak[:4]}"
+    assert "wxid_" not in vtext, "vault 泄漏 wxid"
+    print(f"  ✅ Obsidian vault：{vr['people']} 人 / {vr['links']} 边 / "
+          f"断链 0 / {tag_count} 个 tag / 无真名")
+
     # 8d. 人物档案页：单文件、零外链、分享模式脱敏
     import render_profile
     prof_path, prof = render_profile.render_profile(con, "林夏",

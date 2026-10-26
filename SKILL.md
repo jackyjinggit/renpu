@@ -102,6 +102,16 @@ renpu todo --done 5                                 # 关待办
 随用户配置变化。**时效敏感的任务先 `renpu ingest --pull`**（拉最新解密快照再摄取，约 30-90 秒），
 否则可能拿到几周前的对话——「读旧库漏掉 51 条新对话导致关系定性全变」是本机实证过的坑。
 
+## 导出到 Obsidian
+
+```bash
+renpu export-vault --limit 120 --min-messages 20     # 脱敏（默认）
+renpu export-vault --no-share                        # 写真名（谨慎）
+```
+
+产出一个 Obsidian vault：人/群各一篇笔记 + 互相双链 + `#tag`（按群分色）。
+Obsidian 的 3d-graph / breadcrumbs / smart-connections 直接能消费。
+
 ## 硬纪律（不可绕过）
 
 1. **PII 红线**：库默认在用户级目录，不出本机、不入 git、不进公开线、不发飞书/企微。入库自动脱敏手机号/身份证/卡号。

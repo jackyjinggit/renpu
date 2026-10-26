@@ -342,6 +342,20 @@ class RenpuDesktop(tk.Tk):
             fn()
 
     # ───────────────────────── 数据访问 ─────────────────────────
+    def _post(self, fn):
+        """从后台线程安全地回到主线程更新 UI。
+
+        为什么需要这一层（2026-10-26 实测）：
+            后台线程直接调 self.after(0, ...) 在窗口已关闭时会抛
+            "RuntimeError: main thread is not in main loop"，
+            异常发生在后台线程里 → 界面无反应、控制台一片红。
+            窗口都关了，就没必要再更新 —— 静默忽略即可。
+        """
+        try:
+            self.after(0, fn)
+        except RuntimeError:
+            pass
+
     def _con(self):
         """打开当前生效的库连接。"""
         import core
@@ -554,14 +568,14 @@ class RenpuDesktop(tk.Tk):
                 out.parent.mkdir(parents=True, exist_ok=True)
                 path, _ = render_profile.render_profile(con, who, out, share=False)
                 con.close()
-                self.after(0, lambda: webbrowser.open(Path(path).resolve().as_uri()))
-                self.after(0, lambda: self.status_var.set(f"已生成人物档案页：{path}"))
+                self._post(lambda: webbrowser.open(Path(path).resolve().as_uri()))
+                self._post(lambda: self.status_var.set(f"已生成人物档案页：{path}"))
             except Exception as exc:
                 try:
                     con.close()
                 except Exception:
                     pass
-                self.after(0, lambda: messagebox.showerror("生成档案页失败", str(exc)))
+                self._post(lambda: messagebox.showerror("生成档案页失败", str(exc)))
         threading.Thread(target=work, daemon=True).start()
 
     # ───────────────────────── 视图：关系图谱 ─────────────────────────
@@ -891,6 +905,71 @@ class RenpuDesktop(tk.Tk):
         ttk.Button(info, text="打开数据目录", style="Ghost.TButton",
                    command=lambda: os.startfile(str(user_data_dir()))).pack(anchor="w")
 
+        # ── Obsidian vault 导出 ──
+        # 为什么做这个（2026-10-26 蒋平定方向）：
+        #   「以 Obsidian 为基底，加插件」—— 不再给仁谱写一套界面，
+        #   而是让仁谱当**数据生产者**，Obsidian 生态当消费端。
+        #   蒋平本机已装 3d-graph / breadcrumbs / smart-connections，
+        #   它们吃的都是 vault 里的 markdown + 双链，仁谱的真库正好能生成这种形态。
+        obs = ttk.Frame(v, style="Panel.TFrame", padding=16)
+        obs.pack(fill="x", pady=(14, 0))
+        ttk.Label(obs, text="导出到 Obsidian", style="Card.TLabel").pack(anchor="w")
+        ttk.Label(obs, text="把人脉导成 vault 里的笔记 + 双链，"
+                            "Obsidian 的 3D 图谱 / breadcrumbs 立刻能可视化你的关系网。",
+                  style="CardS.TLabel").pack(anchor="w", pady=(6, 10))
+        self.vault_limit = tk.IntVar(value=120)
+        line = ttk.Frame(obs, style="Panel.TFrame")
+        line.pack(fill="x")
+        ttk.Label(line, text="人数", style="CardS.TLabel").pack(side="left")
+        tk.Spinbox(line, from_=20, to=600, increment=20, textvariable=self.vault_limit,
+                   width=6, bg=PANEL, fg=TEXT, buttonbackground=PANEL2,
+                   insertbackground=TEXT, relief="flat", highlightthickness=0
+                   ).pack(side="left", padx=(6, 12))
+        self.vault_share = tk.BooleanVar(value=True)
+        ttk.Checkbutton(line, text="脱敏", variable=self.vault_share).pack(side="left")
+        ttk.Button(line, text="导出", style="Primary.TButton",
+                   command=self.export_vault).pack(side="left", padx=(14, 0))
+        ttk.Button(line, text="打开导出目录", style="Ghost.TButton",
+                   command=self.open_vault_dir).pack(side="left", padx=(10, 0))
+
+    def export_vault(self):
+        """导出一份 Obsidian vault（后台跑，不卡界面）。"""
+        # ⚠️ tkinter 的变量读取**必须在主线程** ——
+        #    后台线程调 self.vault_limit.get() 会抛
+        #    "RuntimeError: main thread is not in main loop"。
+        #    所以先在这里取值，再传给后台线程；
+        #    万一还是不在主线程（异常调用路径），退回默认值而不是崩。
+        try:
+            limit = int(self.vault_limit.get())
+            share = bool(self.vault_share.get())
+        except (RuntimeError, tk.TclError):
+            limit, share = 120, True
+
+        def work():
+            import export_obsidian
+            try:
+                con = self._con()
+                if not con:
+                    self._post(lambda: messagebox.showinfo("还没有数据", "先生成演示数据或接入微信。"))
+                    return
+                outp = user_data_dir() / "exports" / "renpu-vault"
+                r = export_obsidian.export_vault(
+                    con, outp, limit=limit,
+                    min_messages=20, share=share)
+                con.close()
+                self._post(lambda: self.status_var.set(
+                    f"Obsidian vault 已导出：{r['people']} 人 · {r['rooms']} 群 · "
+                    f"{r['links']} 条关系边 → {r['out_dir']}"))
+            except Exception as exc:
+                self._post(lambda: messagebox.showerror("导出失败", str(exc)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def open_vault_dir(self):
+        d = user_data_dir() / "exports" / "renpu-vault"
+        d.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(d))
+        self.status_var.set(f"已打开：{d}（用 Obsidian「打开文件夹作为仓库」指向它）")
+
     def _pick_wc(self):
         d = filedialog.askdirectory(title="选择微信 db_storage 目录")
         if d:
@@ -957,7 +1036,7 @@ class RenpuDesktop(tk.Tk):
                 "PYTHONIOENCODING": "utf-8",
             }
             ok, detail = self._run_cli(["tour", "--out", str(self.demo_dir)], env=env)
-            self.after(0, lambda: self._after_demo(ok, detail))
+            self._post(lambda: self._after_demo(ok, detail))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -983,7 +1062,7 @@ class RenpuDesktop(tk.Tk):
 
         def work():
             ok, detail = self._run_cli(args, env=env)
-            self.after(0, lambda: self._finish_bg(ok, detail, ok_msg, open_after, after_ok))
+            self._post(lambda: self._finish_bg(ok, detail, ok_msg, open_after, after_ok))
 
         threading.Thread(target=work, daemon=True).start()
 

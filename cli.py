@@ -519,6 +519,35 @@ def cmd_profile(a):
         print("   用浏览器打开即可（单文件，可直接发给别人）")
 
 
+def cmd_export_vault(a):
+    """导出成 Obsidian vault（人脉笔记 + 双链）。
+
+    为什么做这个（2026-10-26 蒋平定方向）：
+        「以 Obsidian 为基底，加插件」—— 不再给仁谱写一套界面，
+        而是让**仁谱当数据生产者**，Obsidian 生态当消费端。
+        蒋平本机已装的 3d-graph / breadcrumbs / smart-connections
+        吃的都是 vault 里的 markdown + 双链，仁谱的真库正好能生成这种形态。
+
+    产出的 vault 可以直接被 Obsidian 打开，或并进已有的 vault。
+    """
+    import export_obsidian
+    con = core.connect()
+    outp = Path(a.out) if a.out else (Path(core.EXPORT_DIR) / "renpu-vault")
+    # --share 默认开；--no-share 显式关掉（两者不能同时生效，no-share 优先）
+    share = False if getattr(a, "no_share", False) else True
+    r = export_obsidian.export_vault(con, outp, limit=a.limit,
+                                    min_messages=a.min_messages, share=share)
+    con.close()
+    if a.json:
+        out({"title": "Obsidian vault 导出", "file": r["out_dir"],
+             "people": r["people"], "rooms": r["rooms"],
+             "links": r["links"], "files": r["files"]}, True)
+    else:
+        print(f"✅ Obsidian vault 已导出：{r['out_dir']}")
+        print(f"   {r['people']} 人 · {r['rooms']} 群 · {r['links']} 条关系边 · {r['files']} 篇笔记")
+        print("   用 Obsidian 打开这个文件夹即可（自带 3d-graph / breadcrumbs 就能看图谱）")
+
+
 def cmd_graph3d(a):
     """生成 3D 关系圈聚光 HTML（单文件，可直接分享）。"""
     import render3d
@@ -626,6 +655,17 @@ def build_parser():
                    help="分享模式：真名脱敏、时间降级到天（可安全发给别人）")
     s.add_argument("--out", help="输出路径（默认落在数据目录）")
     s.set_defaults(fn=cmd_profile)
+
+    s = sub.add_parser("export-vault", help="导出成 Obsidian vault（人脉笔记 + 双链）")
+    s.add_argument("--limit", type=int, default=120, help="最多导出多少人（默认 120）")
+    s.add_argument("--min-messages", type=int, default=20, dest="min_messages",
+                   help="消息数下限（低于此值不导出，默认 20）")
+    s.add_argument("--share", action="store_true", default=True,
+                   help="脱敏导出（默认开；用 --no-share 关掉）")
+    s.add_argument("--no-share", action="store_true", dest="no_share",
+                   help="不脱敏导出（会写真人名与群名，谨慎）")
+    s.add_argument("--out", help="输出目录（默认落在导出目录）")
+    s.set_defaults(fn=cmd_export_vault)
 
     s = sub.add_parser("graph3d", help="生成 3D 关系圈聚光 HTML（聚焦某人的关系结构）")
     s.add_argument("--person", help="中心人物的名字或 person_key（默认自动选关系最多的人）")
