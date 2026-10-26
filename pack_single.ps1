@@ -36,6 +36,19 @@ param(
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
+# ⚠️ 必须限制 BLAS 线程数（2026-10-26 实测踩坑）：
+#    PyInstaller 打包时会起 isolated 子进程做 hook 发现，
+#    那个子进程 import importlib_metadata → 触发 OpenBLAS 分配大数组。
+#    机器内存紧张时（本机 llama-server 常占 13GB，剩 0.4GB）会失败：
+#        OpenBLAS error: Memory allocation still failed after 10 retries
+#        SubprocessDiedError: Child process died calling discover_hook_directories()
+#    报的是 PyInstaller 的错，真因是 BLAS 线程数 —— 限制成 1 就好，
+#    不需要杀任何进程、不需要加内存。
+$env:OPENBLAS_NUM_THREADS = '1'
+$env:OMP_NUM_THREADS = '1'
+$env:MKL_NUM_THREADS = '1'
+$env:NUMEXPR_NUM_THREADS = '1'
+
 # 原生命令写 stderr 不该让整个脚本挂掉 —— 用 Continue + 手动查 $LASTEXITCODE
 $ErrorActionPreference = 'Continue'
 
@@ -75,8 +88,13 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ── 3. 清理 ──
+# ⚠️ 必须连 build 根目录一起清（2026-10-26 实测踩坑）：
+#    PyInstaller 会在 build\ 根下留 PYZ-00.toc / Analysis-00.toc 等**缓存**，
+#    只清 build\<名字>\ 的话，缓存里的旧模块清单会被复用 →
+#    新加的命令（如 export-vault）不进 EXE，但构建不报错。
+#    症状：源码里命令有，EXE 里 --help 看不到，调用报 invalid choice。
 if ($Clean) {
-    foreach ($d in @('build\Renpu', 'build\renpu-cli', 'dist\Renpu', 'dist\renpu-cli')) {
+    foreach ($d in @('build', 'dist')) {
         if (Test-Path $d) { Remove-Item -Recurse -Force $d }
     }
 }
@@ -97,6 +115,7 @@ $hidden = @(
     '--hidden-import', 'render',
     '--hidden-import', 'render3d',
     '--hidden-import', 'render_profile',
+    '--hidden-import', 'export_obsidian',
     '--hidden-import', 'community',
     '--hidden-import', 'server',
     '--hidden-import', 'config',
