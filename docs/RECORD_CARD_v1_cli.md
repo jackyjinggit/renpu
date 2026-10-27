@@ -115,7 +115,7 @@ renpu todo
 【接你真的微信，只要在配置文件里写一行路径：】
 
 ```json
-{ "wc_live": "D:\\...\\db_storage" }
+{ "wc_live": "<微信数据目录>\\db_storage" }
 ```
 
 ```bash
@@ -130,7 +130,7 @@ renpu ingest --pull
 
 【仁谱 v0.1。五分钟装好，本地跑，数据不出机器。】
 
-【AGPL-3.0 开源，蒋平，GitHub 上找 jackyjinggit。】
+【AGPL-3.0 开源，GitHub 上找 jackyjinggit。】
 
 【demo 先跑——再决定要不要接你的真微信。】
 

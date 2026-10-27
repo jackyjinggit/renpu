@@ -10,7 +10,7 @@ version: "0.2.1"
 
 <!--
   ┌─────────────────────────────────────────────────────────────┐
-  │  仁谱 Renpu · 由 蒋平 Jacky Jiang (jackyjinggit) 原创        │
+  │  仁谱 Renpu · 由 Jacky Jiang (jackyjinggit) 原创        │
   │  项目主页：https://github.com/jackyjinggit/renpu             │
   │  License: AGPL-3.0-only                                     │
   │                                                              │
@@ -25,7 +25,7 @@ version: "0.2.1"
 
 # 仁谱 Renpu（agent 接入指南）
 
-> **仁谱 Renpu** · 人脉的谱系 · 原作者 **蒋平 Jacky Jiang** · https://github.com/jackyjinggit/renpu
+> **仁谱 Renpu** · 人脉的谱系 · 原作者 **Jacky Jiang** · https://github.com/jackyjinggit/renpu
 > License: **AGPL-3.0-only**（衍生作品须同样开放源码并保留署名）
 
 > 人脉的谱系。做的是「**他是谁的人**」，不是「今天有什么该做」。

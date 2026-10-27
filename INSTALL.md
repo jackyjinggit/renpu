@@ -50,7 +50,7 @@
 Windows 编辑 `%LOCALAPPDATA%\renpu\config.json`：
 ```json
 {
-  "wc_live": "D:\\Users\\你的用户名\\Documents\\Tencent Files\\xwechat_files\\你的wxid\\db_storage",
+  "wc_live": "<微信数据目录>\db_storage",
   "self_wxid": "wxid_xxxxxxxx"
 }
 ```
@@ -61,7 +61,7 @@ Linux：`~/.config/renpu/config.json`
 **方式 B · 环境变量**（一次性）
 ```bash
 # Windows PowerShell
-$env:RENPU_WC_LIVE   = "D:\Users\...\db_storage"
+$env:RENPU_WC_LIVE   = "<微信数据目录>\db_storage"
 $env:RENPU_SELF_WXID = "wxid_xxxxxxxx"
 
 # macOS/Linux
@@ -79,7 +79,7 @@ renpu doctor
 ```
 应看见：
 ```
-WC_LIVE .................. D:\Users\...\db_storage     ✅ 配置
+WC_LIVE .................. <微信数据目录>\db_storage     ✅ 配置
 SELF_WXID ................ wxid_xxxxxxx                ✅ 自动探测成功
 db_key.txt ................ ✅ 找到
 ```
@@ -118,8 +118,8 @@ export RENPU_PORT=9001          # 持久
 export RENPU_DATA_HOME=~/vault/renpu
 ```
 
-### 接蒋平版 `wc_export`（高级）
-如果你已经用蒋平版的 `wc_export/fresh_pull.py`：
+### 接定制版 `wc_export`（高级）
+如果你已经用定制版的 `wc_export/fresh_pull.py`：
 ```json
 {
   "wc_export": "~/my/wechat-export",

@@ -906,10 +906,10 @@ class RenpuDesktop(tk.Tk):
                    command=lambda: os.startfile(str(user_data_dir()))).pack(anchor="w")
 
         # ── Obsidian vault 导出 ──
-        # 为什么做这个（2026-10-26 蒋平定方向）：
+        # 为什么做这个（2026-10-26 作者定方向）：
         #   「以 Obsidian 为基底，加插件」—— 不再给仁谱写一套界面，
         #   而是让仁谱当**数据生产者**，Obsidian 生态当消费端。
-        #   蒋平本机已装 3d-graph / breadcrumbs / smart-connections，
+        #   作者本机已装 3d-graph / breadcrumbs / smart-connections，
         #   它们吃的都是 vault 里的 markdown + 双链，仁谱的真库正好能生成这种形态。
         obs = ttk.Frame(v, style="Panel.TFrame", padding=16)
         obs.pack(fill="x", pady=(14, 0))

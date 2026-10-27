@@ -960,7 +960,7 @@ if __name__ == "__main__":
     names = [r[0] for r in con.execute(
         "SELECT display_name FROM person ORDER BY msg_total DESC LIMIT 5").fetchall()]
     target = names[0] if names else "me"
-    path, prof = render_profile(con, target, r"F:\Temp\renpu-profile.html", share=False)
+    path, prof = render_profile(con, target, r"<output-file>", share=False)
     print(f"生成: {path}")
     print(f"  主体: {prof['name']} · 关系人 {len(prof['edges'])} · 时间线 {len(prof['timeline'])} 天")
     con.close()

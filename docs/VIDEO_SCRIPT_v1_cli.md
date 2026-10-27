@@ -142,7 +142,7 @@ renpu todo
 ```bash
 # 编辑 %LOCALAPPDATA%\renpu\config.json
 {
-  "wc_live": "D:\\...\\db_storage"
+  "wc_live": "<微信数据目录>\\db_storage"
 }
 
 renpu doctor                     # 现在显示 wc_live ✅
@@ -196,7 +196,7 @@ renpu sync --days 30 --pull
 
 **配音**：
 > 仁谱 v0.1 · 5 分钟装好。
-> AGPL-3.0 开源 · 蒋平 · GitHub 上找 jackyjinggit。
+> AGPL-3.0 开源 · GitHub 上找 jackyjinggit。
 > demo 先跑 ——
 > 再决定要不要接你真微信。
 > 它是产品——但你是最终裁判。

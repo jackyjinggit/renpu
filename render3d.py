@@ -573,7 +573,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import core
     con = core.connect()
-    path, g = write_graph_3d(con, r"F:\Temp\renpu-3d-focus.html", limit=36, share=True)
+    path, g = write_graph_3d(con, r"<output-file>", limit=36, share=True)
     print(f"生成: {path}")
     print(f"  节点 {len(g['nodes'])} / 边 {len(g['links'])}")
     con.close()

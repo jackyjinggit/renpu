@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """仁谱 · Obsidian vault 导出器
 
-为什么做这个（2026-10-26 蒋平定方向）：
+为什么做这个（2026-10-26 作者定方向）：
     「以 Obsidian 为基底，加插件」——不是给仁谱再写一套界面，
     而是让**仁谱成为数据生产者**，Obsidian 生态成为消费端。
 
-    蒋平本机已装的社区插件：
+    作者本机已装的社区插件：
         3d-graph / 3d-graph-new  → 3D 知识图谱
         breadcrumbs               → 双链关系导航
         smart-connections         → 语义检索
@@ -532,6 +532,6 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import core
     con = core.connect()
-    r = export_vault(con, r"F:\Temp\renpu-vault", limit=30, min_messages=5, share=False)
+    r = export_vault(con, r"<output-dir>", limit=30, min_messages=5, share=False)
     print(json.dumps(r, ensure_ascii=False, indent=2))
     con.close()

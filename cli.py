@@ -522,10 +522,10 @@ def cmd_profile(a):
 def cmd_export_vault(a):
     """导出成 Obsidian vault（人脉笔记 + 双链）。
 
-    为什么做这个（2026-10-26 蒋平定方向）：
+    为什么做这个（2026-10-26 作者定方向）：
         「以 Obsidian 为基底，加插件」—— 不再给仁谱写一套界面，
         而是让**仁谱当数据生产者**，Obsidian 生态当消费端。
-        蒋平本机已装的 3d-graph / breadcrumbs / smart-connections
+        作者本机已装的 3d-graph / breadcrumbs / smart-connections
         吃的都是 vault 里的 markdown + 双链，仁谱的真库正好能生成这种形态。
 
     产出的 vault 可以直接被 Obsidian 打开，或并进已有的 vault。

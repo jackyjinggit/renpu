@@ -41,7 +41,7 @@ local-first  cli  agent-tools  contact-management
 
 ---
 
-## 三 · 执行命令（复制即用 · 需蒋平授权）
+## 三 · 执行命令（复制即用）
 
 ```bash
 cd /c/research_workspace/_hub/renpu
@@ -95,7 +95,7 @@ git push origin v0.3.0
 | 执行时间 | 待填 |
 | Release | 待填（是否开 v0.3.0） |
 | zip 附件 | 待填 |
-| 执行人 | 蒋平授权 / 鸿窗执行 |
+| 执行人 | 仓库维护者 |
 
 ---
 
