@@ -291,10 +291,17 @@ def collect_profile(con, center_key, share=False):
     # 宁可少列一个群，也不要把 room:demo_xxx 这种内部 key 抖给用户看。
     room_names = []
     for rk in room_keys:
-        r = con.execute("SELECT name FROM room WHERE room_key = ?", (rk,)).fetchone()
+        r = con.execute("SELECT name, source FROM room WHERE room_key = ?", (rk,)).fetchone()
         if not r or not r["name"]:
             continue
-        room_names.append(SHARE_ROOM if share else str(r["name"]))
+        # 只脱敏**真实**群名 —— demo 群名本来就是虚构的（source='demo'），
+        # 脱敏它只会让演示变成一堆「群（已脱敏）」，看不出圈层结构。
+        # ⚠️ sqlite3.Row 没有 .get()，要用下标取（2026-10-28 实测崩在这）。
+        _src = r["source"] if "source" in r.keys() else "wechat"
+        if share and _src != "demo":
+            room_names.append(SHARE_ROOM)
+        else:
+            room_names.append(str(r["name"]))
     room_names = sorted(set(room_names))
 
     # ── 关系人：名字 + 权重 + 共同群数 ──
@@ -859,6 +866,11 @@ def _assert_no_leak(html_text, namemap):
           这种字段名，以及 the/li 之类的普通英文词）
     精确比对每个「值」才是对的：值是数据，键名是结构。
     """
+    # 🔴 原始群标识（wxroom:xxx）也要查（2026-10-28 实测漏洞）：
+    #    它跟 wxid 同性质 —— 能加群的稳定标识，
+    #    而且真库有一批群名是纯数字（'8'/'5'），群名那层脱敏挡不住它。
+    if "wxroom:" in html_text:
+        raise ValueError("分享模式泄漏了原始群标识（wxroom:xxx）")
     if not namemap:
         return
     values = _data_values(html_text)

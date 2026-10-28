@@ -70,8 +70,11 @@ _DEFAULTS = {
     "port": 8877,          # 8877 = 人脉（避 8787 的撞车）
     "snippet_max": 200,
     # demo adapter 注入量
-    "demo_people": 80,
-    "demo_messages": 2000,
+    # demo 规模（2026-10-28 按真库口径重做后调大）：
+    # 老值 80/2000 实际只生成 10 人 28 边（PEOPLE 硬编码，配置是死的），
+    # 上台演示看着像玩具。现在按真库的关系形态造：200 人 / 14 群 / 约 440 边。
+    "demo_people": 200,
+    "demo_messages": 30000,
 }
 
 

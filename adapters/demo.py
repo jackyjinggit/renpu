@@ -1,17 +1,28 @@
 # -*- coding: utf-8 -*-
-"""仁谱 Demo Adapter · 没有微信库也能体验功能
+"""仁谱 · 演示数据生成器
 
-让任何人在没有微信 live 库、没有 fresh_ 快照的情况下，
-通过 `renpu ingest --demo` 拿到一份看起来真实的演示库。
+为什么要重做（2026-10-28 蒋平反馈「产品不够硬、缺外部证据」）：
+    老版 demo 库只有 **10 人 / 28 条边 / 2000 条消息**，而且
+    **一条私聊边都没有**（只有 co_group）。
 
-仅用于产品演示 / 本地体验 / 单元测试。
+    这意味着上台演示时：
+      · 圈层稀稀拉拉，看着像玩具
+      · **「私聊也是关系」这个核心洞察在 demo 库里完全看不见**
+        —— 现场点开一个人，只有群共现，没有青色的私聊边
+      · config 里的 `demo_people=80` 是**死的**（PEOPLE 硬编码 10 人，
+        EXTRA_DEMOS 是空列表）→ 调配置没用
 
-【脱敏纪律 · 公开仓必读】
-数据 100% 合成，**人名一律虚构**（林夏 / 苏见白 / 陈屿 …），不带任何真实联系人。
-wxid 全部是 `wx:demo_*` 前缀，一眼可辨是 demo 而非用户真实库。
-曾经这里掺过真实人名——公开仓会把私域关系信息写进 git 永久历史，撤不干净，
-故改为全虚构。示例人名本身也刻意选得不像真人，减少误认。
+    新的 demo 库按「真库的关系形态」造：
+      · 规模可配（默认 80 人，可调到 200+）
+      · **圈层有结构**（不是平均分布，是几个大小不一的真实圈子）
+      · **私聊边按真实分布**：一部分人跟你私聊很多、一部分只共现、
+        还有一部分**只在私聊里出现、任何群里都没有**（这才是洞察的载体）
+      · 每个人的分层 / 圈层 / 角色 / 消息量都合理
+
+    ⚠️ 全部虚构：人名、群名、对话内容均为编造，不含任何真实信息。
 """
+from __future__ import annotations
+
 import random
 import time
 
@@ -20,40 +31,44 @@ from config import DEMO_PEOPLE, DEMO_MESSAGES
 from adapters.wechat import DIRECT_MIN_MESSAGES  # 私聊关系边阈值（与真实源同口径）
 
 
-# (person_key, 姓名, 分层, 关系描述, 角色, 圈层)  —— 全虚构
-PEOPLE = [
-    ("wx:demo_lin",  "林夏",   "AAA", "同行",       "researcher",   "学术线"),
-    ("wx:demo_su",   "苏见白", "AAA", "mentor",     "AI 教育",      "教育线"),
-    ("wx:demo_chen", "陈屿",   "AAA", "协作伙伴",   "工程师",       "产品线"),
-    ("wx:demo_zhou", "周斯年", "AAA", "同学",       "data eng",    "同届"),
-    ("wx:demo_gu",   "顾南舟", "AAA", "同学",       "AI 工程",      "同届"),
-    ("wx:demo_shen", "沈迟",   "Aa",  "学姐",       "NLP",          "学术线"),
-    ("wx:demo_jiang", "江白露", "Aa",  "顾问",       "AI 公司",      "行业线"),
-    ("wx:demo_xu",   "许聿白", "a",   "网友",       "developer",    "线上"),
-    ("wx:demo_luo",  "罗青禾", "a",   "队友",       "AI/RL",        "黑客松线"),
-    ("wx:demo_wen",  "温屿声", "a",   "资源方",     "数据销售",     "资源线"),
+# ── 虚构人名素材（组合生成，保证不与真实人名重合）──
+_SURNAMES = ["林", "苏", "陈", "周", "顾", "沈", "江", "许", "罗", "温",
+             "柯", "邵", "裴", "宋", "梁", "薛", "孟", "卫", "沈", "尤"]
+_GIVEN = ["夏", "见白", "屿", "斯年", "南舟", "迟", "白露", "聿白", "青禾", "屿声",
+          "砚", "澈", "桐", "屿", "珩", "野", "桉", "之遥", "叙白", "临川"]
+_ROLES = ["researcher", "engineer", "designer", "PM", "data eng", "student",
+          "investor", "operator", "editor", "founder"]
+_CIRCLES = ["学术线", "教育线", "产品线", "同届", "行业线", "黑客松线", "资源线",
+            "开源线", "投资线", "媒体线"]
+_RELATIONS = ["同行", "mentor", "协作伙伴", "同学", "学姐", "顾问", "网友",
+              "队友", "资源方", "前同事", "客户", "供应商"]
+_TIERS = ["AAA", "AAA", "Aa", "Aa", "a", "a", "a", "a", "b", "b"]
+
+# 圈层：每个圈有名字、规模、以及「这个圈里谁跟你私聊多」
+_CIRCLES_PLAN = [
+    # (圈名, 人数占比, 平均群数, 私聊倾向 0-1)
+    ("核心圈",     0.12, 3.2, 0.85),
+    ("同行圈",     0.20, 2.4, 0.45),
+    ("同学圈",     0.18, 2.0, 0.30),
+    ("黑客松线",   0.15, 1.8, 0.35),
+    ("资源线",     0.12, 1.5, 0.20),
+    ("行业线",     0.13, 1.2, 0.25),
+    ("长尾",       0.10, 0.6, 0.10),
 ]
 
-EXTRA_DEMOS = []  # 自动按 PEOPLE 模板生成
+_TAGS = ["创业", "学生", "项目", "黑客松组织", "资源", "同届", "海外", "mentor",
+         "开发者社区", "开源项目", "GOSIM", "知乎官方技术", "软件开发", "教育",
+         "投资", "媒体", "数据", "模型", "产品", "设计"]
 
-TAGS = ["AAA", "AAAA", "Aa", "a", "创业", "学生", "项目", "黑客松组织",
-        "资源", "同届", "海外", "mentor", "开发者社区", "开源项目",
-        "GOSIM", "知乎官方技术", "众达", "软件开发"]
-
-
-SNIPPETS = [
+_SNIPPETS = [
     "下周二有个 AI 治理的圆桌，想去吗？",
     "你看下这个方案，备份方案下周三前定",
-    "AAA 名单我重新整理了一下，附件给你",
+    "名单我重新整理了一下，附件给你",
     "今晚一起吃饭？我那边新开了家小馆",
     "刚跑了下 27B 的本地模型，效果意外不错",
-    "TrueFellow 那边的接口对接我周末拉通",
-    "有个朋友想认识你，叫 TA 直接加你微信还是先约我这里？",
-    "黑客松的赛题出了，今年 AI 软件创新方向",
-    "黑客松我们组要不要报？我缺一个做后端的",
-    "GOSIM 那个黑客松我看到你了，你直接报名",
+    "接口对接我周末拉通，完了给你结果",
     "收到，我下午反馈你",
-    "你那个 PDSS 协议我读了，妙",
+    "你那个协议我读了，妙",
     "明天 10 点前给我初稿，谢谢",
     "刚看到一篇论文，跟你那个很像",
     "改一下目录，明天再聊",
@@ -63,156 +78,304 @@ SNIPPETS = [
     "你那边需要什么资源，告诉我",
     "明天能再约一次吗",
     "这件事我记着呢，这周办",
-    "好，等你",
+    "材料我发你了，有空看看",
+    "这个价格能谈，但得签协议",
+    "简历我看过了，基础不错",
+    "先做一个小样，跑通了再谈",
+    "我们那边缺一个懂工程的",
+    "你这个思路可以，但要能落地",
     "晚安",
+    "在忙吗？有个事想请教",
+    # 这几条要含「黑客松」—— 演示时用中文全文检索搜的就是这个词，
+    # 消息正文里没有它，搜索演示就是空的（2026-10-28 实测）。
+    "黑客松我们组要不要报？我缺一个做后端的",
+    "黑客松的赛题出了，今年 AI 软件创新方向",
+    "下周黑客松见，材料你带了吗",
 ]
 
 
-# 群模板：(room_key, 群名, 成员)
-# room_key 必须与下面 core.upsert_room(f"wxroom:{name}") 的口径完全一致，
-# 否则 edge.rooms 里的群 key 对不上 room 表 → 「共同群数」和「所在群」全是错的。
-ROOM_TEMPLATES = [
-    ("wxroom:开发者社区 线上",  "开发者社区 线上",
-     ["wx:demo_xu", "wx:demo_jiang", "wx:demo_su", "wx:demo_chen"]),
-    ("wxroom:核心圈内部群",  "核心圈内部群",
-     [p[0] for p in PEOPLE if p[2] == "AAA"][:5]),
-    ("wxroom:同届群", "同届群",
-     [p[0] for p in PEOPLE if "同届" in (p[5] or "")][:6]),
-    ("wxroom:黑客松组队群", "黑客松组队群",
-     ["wx:demo_luo", "wx:demo_gu", "wx:demo_xu", "wx:demo_lin", "wx:demo_wen"]),
-    ("wxroom:开源项目组", "开源项目组",
-     ["wx:demo_lin", "wx:demo_chen", "wx:demo_xu", "wx:demo_su"]),
-]
+def _make_people(n):
+    """按圈层计划生成 n 个虚构的人。"""
+    people = []
+    used = set()
+    idx = 0
+    for circle, share, rooms, dm_tendency in _CIRCLES_PLAN:
+        count = max(2, int(n * share))
+        for _ in range(count):
+            if len(people) >= n:
+                break
+            # 造不重复的名字
+            while True:
+                nm = random.choice(_SURNAMES) + random.choice(_GIVEN)
+                if nm not in used:
+                    used.add(nm)
+                    break
+            idx += 1
+            tier = random.choice(_TIERS)
+            role = random.choice(_ROLES)
+            relation = random.choice(_RELATIONS)
+            # 私聊倾向：越高越可能只私聊、不同群
+            dm = random.random() < dm_tendency
+            people.append({
+                "key": f"wx:demo_{idx:03d}",
+                "name": nm,
+                "tier": tier,
+                "circle": circle,
+                "role": role,
+                "relation": relation,
+                "rooms": max(1, int(random.gauss(rooms, 0.8))),
+                "dm_tendency": dm,
+            })
+    # 补齐到 n
+    while len(people) < n:
+        idx += 1
+        nm = random.choice(_SURNAMES) + random.choice(_GIVEN) + str(len(people))
+        people.append({
+            "key": f"wx:demo_{idx:03d}", "name": nm, "tier": "a",
+            "circle": "长尾", "role": random.choice(_ROLES),
+            "relation": random.choice(_RELATIONS),
+            "rooms": 1, "dm_tendency": random.random() < 0.15,
+        })
+    return people
+
+
+def _make_rooms(people):
+    """按圈层生成群 —— 口径照抄真库（2026-10-28 逐项对照真库后重写）。
+
+    真库的实测口径（用来对照，不是拍脑袋）：
+        265 群 · 群均 70 人 · co_group 边权重 89% 是 1.0
+        → 绝大多数人**只在一个群里**，所以「共同群」= 1，边自然稀疏
+        → 同口径下图上是 4.1 条/人
+
+    前两版都栽在「边太密」上（15 条/人 vs 真库 4.1）→
+    全网互连成一团，图上根本看不出圈层。根因有二：
+        ① 让人进多个群
+        ② 把「圈里的核心人物」塞进该圈**每一个**群
+           → 有几个人进了 10~19 个群 → 他们跟所有人连 → 边爆炸
+    这版的做法：
+        · 每人**最多进 2 个群**（第二个是跨界群）
+        · 每个群 12~28 人
+        · 群内没有"必须带上的核心人物"
+    """
+    rooms = []
+    by_circle = {}
+    for p in people:
+        by_circle.setdefault(p["circle"], []).append(p["key"])
+
+    for circle, members in by_circle.items():
+        # 每圈 1~2 个群；圈内人 82% 进群，18% 留作长尾（只在私聊里出现）
+        n_rooms = 1 if len(members) < 18 else 2
+        shuffled = list(members)
+        random.shuffle(shuffled)
+        in_rooms = shuffled[:max(6, int(len(shuffled) * 0.82))]
+
+        seg = max(6, len(in_rooms) // n_rooms)
+        for i in range(n_rooms):
+            chunk = in_rooms[i * seg:(i + 1) * seg]
+            if len(chunk) < 3:
+                if rooms and rooms[-1][2] is not None and rooms[-1][0].startswith(f"wxroom:{circle}"):
+                    rooms[-1] = (rooms[-1][0], rooms[-1][1], rooms[-1][2] + chunk)
+                continue
+            rname = f"{circle}·{i+1}群" if n_rooms > 1 else f"{circle}群"
+            rooms.append((f"wxroom:{rname}", rname, chunk))
+
+    # 跨界者：约 6% 的人额外进**另一个圈**的一个群（真实世界也有这种人）
+    if len(rooms) >= 2:
+        for _ in range(max(1, len(people) // 16)):
+            src = random.choice(rooms)
+            dst = random.choice(rooms)
+            if src[0] == dst[0]:
+                continue
+            who = random.choice(src[2])
+            if who not in dst[2] and len(dst[2]) < 30:
+                dst[2].append(who)
+    return rooms
 
 
 def ingest(progress=print):
     started = core.now()
     progress("🧪 Demo 模式启动 · 不会触碰真微信库")
+    # ⚠️ 固定随机种子 —— demo 必须**幂等**（2026-10-28 实测回归）：
+    #    重跑 `ingest --demo` 两次，消息数会变（随机生成的人数/分布不同）
+    #    → 幂等断言挂、且用户会以为自己的库被改坏了。
+    #    同一个种子 → 同一份数据。
+    random.seed(20261028)
+    # ⚠️ 必须先建表（2026-10-28 实测崩在这里）：
+    #    全新安装的用户第一个命令就是 `ingest --demo`，
+    #    而 purge_window 会 DELETE FROM msg_fts —— 表不存在直接 OperationalError。
+    #    demo 不该要求用户先跑一遍 init。
+    #    传当前库的路径（CLI 已把 config.DB_PATH 设成 demo 库），
+    #    避免无参 init_db 建到别的位置去。
+    core.init_db(core.DB_PATH)
     grm = core.connect()
-    core.purge_window(grm, 0); grm.commit()
+    core.purge_window(grm, 0)
+    # 🔴 必须清掉上一轮 demo 留下的**群成员关系**（2026-10-28 实测踩坑）：
+    #    purge_window 只清消息，不清 room_member →
+    #    重跑一次成员的群归属就叠加（实测有人进了 19 个群）→
+    #    边密度 15.8 条/人（真库同口径 4.1）→ 图上全是一团，看不出圈层。
+    grm.execute("DELETE FROM room_member")
+    grm.execute("DELETE FROM room WHERE source='demo'")
+    grm.execute("DELETE FROM person WHERE source='demo'")
+    grm.execute("DELETE FROM identity WHERE person_key LIKE 'wx:demo_%'")
+    grm.execute("DELETE FROM person_tag WHERE person_key LIKE 'wx:demo_%'")
+    grm.execute("DELETE FROM tag WHERE source='demo'")
+    grm.execute("DELETE FROM edge WHERE src LIKE 'wx:demo_%' OR dst LIKE 'wx:demo_%'")
+    grm.commit()
+
+    n_people = max(10, DEMO_PEOPLE)
+    n_messages = max(500, DEMO_MESSAGES)
+    people = _make_people(n_people)
+    rooms = _make_rooms(people)
+    by_key = {p["key"]: p for p in people}
 
     # ── 人 ──
-    progress(f"… 注入 {len(PEOPLE)} 个 demo 人（全虚构，含分层标签 AAA/Aa/a + 圈层）")
-    for pk, name, tier, relation, role, circle in PEOPLE:
-        core.upsert_person(grm, pk, name, tier=tier, circle=circle, org=None,
-                           role=role, relation=relation, source="demo",
+    progress(f"… 注入 {len(people)} 个 demo 人（全虚构，含分层 / 圈层 / 角色）")
+    for p in people:
+        core.upsert_person(grm, p["key"], p["name"], tier=p["tier"],
+                           circle=p["circle"], org=None, role=p["role"],
+                           relation=p["relation"], source="demo",
                            note="演示数据 · 人名与关系均虚构")
-        # 取随机 2-5 个标签
-        for tag in random.sample(TAGS, random.randint(1, 4)):
-            core.tag_person(grm, pk, tag, source="demo")
-        core.upsert_identity(grm, pk, "demo", pk.split(":")[1])
+        for tag in random.sample(_TAGS, random.randint(1, 4)):
+            core.tag_person(grm, p["key"], tag, source="demo")
+        core.upsert_identity(grm, p["key"], "demo", p["key"].split(":")[1])
 
     # ── 「我」──
-    # demo 之前没有 me 这个 person 记录（只把 "me" 当 sender 用），
-    # 后果：图上找不到自己、搜索结果显示「谁=me」、没有以我为中心的私聊边。
-    core.upsert_person(grm, "me", "我", source="demo",
-                       note="演示数据 · 这是你")
+    core.upsert_person(grm, "me", "我", source="demo", note="演示数据 · 这是你")
     core.upsert_identity(grm, "me", "demo", "me")
 
     # ── 群 ──
-    for rk, name, member_ids in ROOM_TEMPLATES:
-        member_ids = [m for m in member_ids if m]
-        if not member_ids:
-            continue
-        core.upsert_room(grm, f"wxroom:{name}", name=name, channel_id=name,
+    progress(f"… 注入 {len(rooms)} 个 demo 群")
+    for rk, name, member_ids in rooms:
+        core.upsert_room(grm, rk, name=name, channel_id=name,
                          member_cnt=len(member_ids), source="demo")
         for mid in member_ids:
-            core.add_room_member(grm, f"wxroom:{name}", mid)
+            core.add_room_member(grm, rk, mid)
 
+    # ── 群共现边 ──
+    progress("… 推导群共现关系边")
+    edges = 0
+    for rk, _name, member_ids in rooms:
+        if not (2 <= len(member_ids) <= 60):
+            continue
+        for i in range(len(member_ids)):
+            for j in range(i + 1, len(member_ids)):
+                core.add_edge(grm, member_ids[i], member_ids[j], "co_group", 1.0, [rk])
+                edges += 1
+                if edges > 200000:
+                    break
     grm.commit()
 
-    # ── 消息 ──
-    progress(f"… 注入近 {DEMO_MESSAGES} 条 demo 消息（覆盖近 60 天）")
+    # ── 消息（群里的）──
+    progress(f"… 注入近 {n_messages} 条 demo 消息（覆盖近 60 天）")
     msgs = 0
     d30 = time.time() - 30 * 86400
     now = time.time()
-    while msgs < DEMO_MESSAGES:
-        pk = random.choice([p[0] for p in PEOPLE])
+    while msgs < n_messages:
+        pk = random.choice([p["key"] for p in people])
         ts = now - random.uniform(0, 60 * 86400)
         sender = "me" if random.random() < 0.4 else pk
-        snippet = random.choice(SNIPPETS)
+        snippet = random.choice(_SNIPPETS)
         core.add_message(grm, pk, ts, sender, 1 if sender == "me" else 0, 1, snippet)
         if ts > d30:
-            grm.execute("UPDATE person SET msg_d30=COALESCE(msg_d30,0)+1, last_active=? WHERE person_key=?",
-                        (ts, pk))
-            grm.execute("UPDATE person SET msg_total=COALESCE(msg_total,0)+1 WHERE person_key=?", (pk,))
-        else:
-            grm.execute("UPDATE person SET msg_total=COALESCE(msg_total,0)+1 WHERE person_key=?", (pk,))
+            grm.execute("UPDATE person SET msg_d30=COALESCE(msg_d30,0)+1, last_active=? "
+                        "WHERE person_key=?", (ts, pk))
+        grm.execute("UPDATE person SET msg_total=COALESCE(msg_total,0)+1 "
+                    "WHERE person_key=?", (pk,))
         msgs += 1
 
-    # 一次聚合
-    for pk in [p[0] for p in PEOPLE]:
-        row = grm.execute(
-            "SELECT MAX(last_active), SUM(msg_total), SUM(msg_d30) FROM ("
-            "  SELECT MAX(ts) last_active, 0 msg_total, 0 msg_d30 FROM msg_index WHERE conv_key=? "
-            "  UNION ALL SELECT NULL, COUNT(*), 0 FROM msg_index WHERE conv_key=?"
-            "  UNION ALL SELECT NULL, 0, COUNT(*) FROM msg_index WHERE conv_key=? AND ts > ?"
-            ")", (pk, pk, pk, d30)).fetchone()
-        if row and row[0]:
-            grm.execute("UPDATE person SET last_active=? WHERE person_key=? AND (last_active IS NULL OR last_active<?)",
-                        (row[0], pk, row[0]))
+    # ── 私聊消息 + 私聊关系边 ──
+    # 关键：私聊边是仁谱的核心洞察载体。
+    # demo 必须有 —— 且要有「只在私聊里、任何群里都不出现」的人，
+    # 否则上台演示点开一个人只有群共现，看不出私聊边。
+    progress("… 注入私聊对话与私聊关系边")
+    dm_people = [p for p in people if p["dm_tendency"]]
+    # 保证有一批「纯私聊型」的人：只跟「我」有私聊，不进任何群
+    pure_dm = random.sample(dm_people, min(max(6, len(dm_people) // 3), len(dm_people)))
+    pure_set = {p["key"] for p in pure_dm}
+    # 纯私聊型的人从所有群里移除
+    for rk, _name, member_ids in rooms:
+        keep = [m for m in member_ids if m not in pure_set]
+        if len(keep) < 2:
+            keep = member_ids[:2]
+        for mid in member_ids:
+            grm.execute("DELETE FROM room_member WHERE room_key=? AND person_key=?",
+                        (rk, mid))
+        for mid in keep:
+            core.add_room_member(grm, rk, mid)
 
-    # ── 关系边（群共现） ──
-    edges = 0
-    for rk, _, member_ids in ROOM_TEMPLATES:
-        for i, a in enumerate(member_ids):
-            for b in member_ids[i + 1:]:
-                core.add_edge(grm, a, b, "co_group", 1.0, [rk])
-                edges += 1
+    dm_counts = {}
+    for p in people:
+        if p["key"] in pure_set:
+            # 纯私聊型：与我的私聊量很大，别的都是 0
+            n = random.randint(30, 400)
+        elif p["dm_tendency"] and random.random() < 0.5:
+            n = random.randint(12, 120)
+        else:
+            n = 0
+        if n:
+            dm_counts[p["key"]] = n
+
+    for pk, cnt in dm_counts.items():
+        for _ in range(cnt):
+            ts = now - random.uniform(0, 90 * 86400)
+            mine = random.random() < 0.45
+            core.add_message(grm, pk, ts, "me" if mine else pk,
+                             1 if mine else 0, 1, random.choice(_SNIPPETS))
+            grm.execute("UPDATE person SET msg_total=COALESCE(msg_total,0)+1 "
+                        "WHERE person_key=?", (pk,))
+            if ts > d30:
+                grm.execute("UPDATE person SET msg_d30=COALESCE(msg_d30,0)+1 "
+                            "WHERE person_key=?", (pk,))
     grm.commit()
 
-    # ── 私聊关系边（direct）──
-    # demo 的消息 conv_key 就是对方的 person_key（私聊结构），
-    # 所以直接按 conv_key 聚合就能得到「我↔某人」的私聊关系。
-    # 这与真实微信的推导口径一致（wechat.py 里同款逻辑）。
+    # 私聊关系边（覆盖模式：权重就是消息条数）
     direct = 0
-    for r in grm.execute(
-            "SELECT conv_key, COUNT(*) c FROM msg_index "
-            "WHERE conv_key LIKE 'wx:%' GROUP BY conv_key HAVING c >= ?",
-            (DIRECT_MIN_MESSAGES,)).fetchall():
-        other = r["conv_key"]
-        if other == "wx:me":
+    for pk, cnt in dm_counts.items():
+        if cnt < DIRECT_MIN_MESSAGES:
             continue
-        a, b = ("me", other) if "me" < other else (other, "me")
-        core.add_edge(grm, a, b, "direct", float(r["c"]), None,
-                      note=f"私聊 {r['c']} 条", accumulate=False)
+        a, b = ("me", pk) if "me" < pk else (pk, "me")
+        core.add_edge(grm, a, b, "direct", float(cnt), None,
+                      note=f"私聊 {cnt} 条", accumulate=False)
         direct += 1
     grm.commit()
     edges += direct
 
-    # 写死几个关系事件/待办（视频脚本要演的固定人物必须命中，否则画面空）
-    progress("… 注入 demo 关系事件/待办")
-    now = int(time.time())
+    # ── 关系事件 / 待办（让档案页有内容）──
+    # ⚠️ 先清掉上一轮 demo 留下的事件与待办（2026-10-28 实测）：
+    #    不清的话重跑一次 events 3→6、todos 12→24 翻倍 → 破坏幂等。
+    progress("… 注入 demo 关系事件 / 待办")
+    grm.execute("DELETE FROM event WHERE source='demo' OR person_key LIKE 'wx:demo_%'")
+    grm.execute("DELETE FROM todo WHERE person_key LIKE 'wx:demo_%'")
+    grm.commit()
+    now_i = int(time.time())
     SCRIPTED_EVENTS = [
-        ("wx:demo_lin", "first_talk", 12, "首次深聊", "从陌生到能约饭的关系节点"),
-        ("wx:demo_lin", "promise", 3, "答应引荐一位同行", "她说材料整理好就转发给我"),
-        ("wx:demo_su",  "intro", 5, "把我拉进一个黑客松组队群", "他组里缺一个懂工程的人"),
+        ("wx:demo_001", "first_talk", 42, "首次深聊", "从陌生到能约饭的关系节点"),
+        ("wx:demo_001", "promise", 12, "答应引荐一位同行", "她说材料整理好就转发给我"),
+        ("wx:demo_002", "intro", 26, "把我拉进一个组队群", "他组里缺一个懂工程的人"),
     ]
     for pk, kind, days_ago, title, detail in SCRIPTED_EVENTS:
-        core.add_event(grm, pk, kind, now - days_ago * 86400,
-                       title=title, detail=detail,
-                       evidence="（演示数据，非真实对话）", source="demo")
-    others = [p[0] for p in PEOPLE if p[0] not in
-              {e[0] for e in SCRIPTED_EVENTS}]
-    for pk in random.sample(others, min(2, len(others))):
-        core.add_event(grm, pk, "first_talk", now - random.randint(10, 40) * 86400,
-                       title="首次深聊", detail="（演示）从陌生到能约饭",
-                       evidence="（演示数据）", source="demo")
-    SCRIPTED_TODOS = [("wx:demo_lin", "下周一问那份材料到哪了"),
-                      ("wx:demo_su",  "黑客松组队：确认工程人选")]
-    for pk, title in SCRIPTED_TODOS:
-        core.add_todo(grm, title, person_key=pk, kind="followup",
-                      evidence="（演示数据）")
-    for pk in random.sample(others, min(1, len(others))):
-        core.add_todo(grm, "（演示）回访跟进", person_key=pk, kind="followup")
+        if by_key.get(pk):
+            core.add_event(grm, pk, kind, now_i - days_ago * 86400,
+                           title=title, detail=detail, source="demo")
+    TAGGED = list(by_key)[:12]
+    for i, pk in enumerate(TAGGED):
+        if not by_key.get(pk):
+            continue
+        core.add_todo(grm, "下周一问那份材料到哪了", person_key=pk,
+                      kind="followup", due=None, evidence="demo")
 
+    grm.commit()
+
+    # ── 审计 ──
     grm.execute(
         "INSERT INTO sync_log(source,src_path,started_at,ended_at,rows_people,rows_msgs,note) "
         "VALUES(?,?,?,?,?,?,?)",
-        ("demo", "(synthetic)", started, core.now(), len(PEOPLE), msgs,
-         f"edges={edges} DEMO 只为产品演示"))
+        ("demo", "(演示数据 · 全虚构)", started, core.now(), len(people),
+         msgs, f"rooms={len(rooms)} edges={edges} direct={direct} "
+               f"pure_dm={len(pure_set)}"))
     grm.commit()
+    st = core.stats(grm)
     grm.close()
-    return {"source": "demo", "people": len(PEOPLE), "messages": msgs,
-            "edges": edges, "tags": len(TAGS),
-            "stats": core.stats(core.connect())}
+    return {"people": len(people), "rooms": len(rooms), "messages": msgs,
+            "edges": edges, "direct": direct, "pure_dm": len(pure_set),
+            "stats": st}

@@ -122,10 +122,12 @@ def collect_neighbourhood(con, center_key, max_people=36, share=False, depth=2):
 
     # 这些人共同出现的群（用于头部统计）
     rooms = [dict(r) for r in con.execute(
-        f"SELECT room.room_key AS room_key, room.name AS name, COUNT(*) AS mine "
+        f"SELECT room.room_key AS room_key, room.name AS name, "
+        f"       room.source AS source, COUNT(*) AS mine "
         f"FROM room_member rm JOIN room ON room.room_key = rm.room_key "
         f"WHERE rm.person_key IN ({ph}) "
-        f"GROUP BY room.room_key, room.name ORDER BY mine DESC LIMIT 12", keys).fetchall()]
+        f"GROUP BY room.room_key, room.name, room.source "
+        f"ORDER BY mine DESC LIMIT 12", keys).fetchall()]
 
     nodes = []
     for i, p in enumerate(ordered):
@@ -171,7 +173,11 @@ def collect_neighbourhood(con, center_key, max_people=36, share=False, depth=2):
             l["src"] = key_of.get(l["src"], l["src"])
             l["dst"] = key_of.get(l["dst"], l["dst"])
         for r in rooms:
-            r["name"] = "群（已脱敏）"
+            # 只脱敏**真实**群名 —— demo 群名本来就是虚构的（source='demo'），
+            # 脱敏它只会让演示变成一堆「群（已脱敏）」，看不出圈层结构。
+            # （2026-10-28 实测：demo 演示时 24 个群全叫「群（已脱敏）」，毫无信息量）
+            if (r.get("source") or "wechat") != "demo":
+                r["name"] = "群（已脱敏）"
     return {"nodes": nodes, "links": links, "rooms": rooms, "center": center_key}
 
 
@@ -562,6 +568,11 @@ def write_graph_3d(con, out_path, center_key=None, limit=36, share=False):
     }
 
     html = _HTML.replace("__DATA__", json.dumps(data, ensure_ascii=False))
+    # 🔴 分享模式最后一道闸：清掉所有原始群标识（wxroom:xxx）
+    if share:
+        import core as _core
+        _core.scrub_room_keys(data)
+        html = _HTML.replace("__DATA__", json.dumps(data, ensure_ascii=False))
     p = Path(out_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(html, encoding="utf-8")

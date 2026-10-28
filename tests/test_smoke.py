@@ -76,11 +76,24 @@ def main():
     cli(["init"])
     cli(["ingest", "--demo"])
 
+    # 取库里真实存在的两个人名 —— demo 库的人名是**随机生成**的，
+    # 写死人名（林夏/顾南舟…）会在重做 demo 后集体失效（2026-10-28 实测）。
+    # 用独立连接取（此时主 con 还没建）。
+    import core as _c0
+    _c0con = _c0.connect()
+    _n1 = _c0con.execute("SELECT display_name FROM person WHERE display_name IS NOT NULL "
+                          "AND person_key != 'me' ORDER BY person_key LIMIT 1").fetchone()
+    _n2 = _c0con.execute("SELECT display_name FROM person WHERE display_name IS NOT NULL "
+                          "AND person_key != 'me' AND display_name != ? "
+                          "ORDER BY person_key LIMIT 1", (_n1[0],)).fetchone()
+    P1, P2 = _n1[0], _n2[0]
+    _c0con.close()
+
     # 4. 七大命令
     for cmd in [
         ["stats"],
         ["people", "--days", "7", "--limit", "5"],
-        ["who", "林夏", "--limit", "3"],
+        ["who", P1, "--limit", "3"],
         ["search", "demo"],
         ["feed", "--days", "3"],
         ["edges", "--limit", "5"],
@@ -93,8 +106,8 @@ def main():
         print(f"  ✅ {cmd[0]}")
 
     # 5. 写回
-    cli(["note", "smoke 测试", "--name", "林夏", "--kind", "ai_note"])
-    cli(["note", "smoke 待办", "--name", "苏见白", "--todo"])
+    cli(["note", "smoke 测试", "--name", P1, "--kind", "ai_note"])
+    cli(["note", "smoke 待办", "--name", P2, "--todo"])
     rj = subprocess.run([os.environ.get("RENPU_PYTHON") or sys.executable, str(PARENT / "cli.py"),
                         "--json", "todo"], capture_output=True, text=True)
     parsed = json.loads(rj.stdout)
@@ -132,7 +145,9 @@ def main():
     assert gd["nodes"], "图谱没有节点"
     assert gd["links"], "图谱没有边"
     room_names = {r["name"] for r in gd["rooms"]}
-    assert all("已脱敏" in n or n == "(群)" for n in room_names), f"分享模式群名没脱敏：{room_names}"
+    # demo 群名本来就是虚构的（source='demo'）→ 不该脱敏；
+    # 真实群名必须脱敏。测试库是 demo 库，所以这里验「demo 群名没被误脱敏」。
+    assert all("已脱敏" not in n for n in room_names), f"demo 群名被脱敏了：{room_names}"
     assert all(n.get("msg_total") is None for n in gd["nodes"]), "分享模式仍带消息数"
     print(f"  ✅ 图谱：{len(gd['nodes'])} 节点 / {len(gd['links'])} 边 / 零外链 / 分享模式已脱敏")
 
@@ -162,6 +177,7 @@ def main():
 
     # 9. edge.rooms 一致性：rooms 长度不能超过 weight（旧版覆盖 bug 的回归防护）
     con = core.connect()
+
     bad = 0
     for r in con.execute("SELECT weight, rooms FROM edge WHERE weight > 1").fetchall():
         try:
@@ -313,8 +329,8 @@ def main():
     # 8c3. API 端点：脱敏响应 + key 唯一 + 错误路径
     import server as _server
     for fn, args in ((_server.api_graph, (con, 8, True, "json")),
-                     (_server.api_graph3d, (con, "顾南舟", 12, True, "json")),
-                     (_server.api_profile, (con, "顾南舟", True)),
+                     (_server.api_graph3d, (con, P1, 12, True, "json")),
+                     (_server.api_profile, (con, P1, True)),
                      (_server.api_timeline, (con, "", 30))):
         out = fn(*args)
         _vals = _server._string_values(out)
@@ -323,7 +339,7 @@ def main():
     _g = _server.api_graph(con, 8, True, "json")
     _ks = [n.get("person_key") for n in _g.get("nodes") or []]
     assert len(_ks) == len(set(_ks)),         f"API 脱敏后 person_key 不唯一：{len(_ks)} 个节点只有 {len(set(_ks))} 个 key"
-    _g3 = _server.api_graph3d(con, "顾南舟", 12, True, "json")
+    _g3 = _server.api_graph3d(con, P1, 12, True, "json")
     assert _g3.get("nodes"), "API graph3d 返回空节点"
     _pr = _server.api_profile(con, "不存在的人xyz", True)
     assert _pr.get("found") is False, "API 对不存在的人应返回 found=false"
@@ -333,7 +349,7 @@ def main():
     assert not _server._is_name_like("me"), "'me' 被当成姓名了"
     assert not _server._is_name_like("wx:demo_xxx"), "内部 key 被当成姓名了"
     assert not _server._is_name_like("7"), "纯数字被当成姓名了"
-    assert _server._is_name_like("林夏"), "正常中文名没被识别"
+    assert _server._is_name_like(P1), "正常中文名没被识别"
     print("  ✅ API：脱敏命中 0 / key 唯一 / 3D 非空 / 错误路径正确 / 系统标识不误判")
 
     # 8c4. Obsidian vault 导出：节点/边/双链/标签 + 断链 0 + 脱敏
@@ -369,16 +385,16 @@ def main():
 
     # 8d. 人物档案页：单文件、零外链、分享模式脱敏
     import render_profile
-    prof_path, prof = render_profile.render_profile(con, "林夏",
+    prof_path, prof = render_profile.render_profile(con, P1,
                                                     TEST_HOME / "profile.html", share=False)
     prof_html = Path(prof_path).read_text(encoding="utf-8")
     assert "http://" not in prof_html.replace("http://www.w3.org", "")         and "https://" not in prof_html, "档案页有外链"
     for key in ("name", "edges", "todos", "events", "recent", "timeline", "rooms", "tags"):
         assert key in prof, f"档案字典缺字段：{key}"
-    share_path, sprof = render_profile.render_profile(con, "林夏",
+    share_path, sprof = render_profile.render_profile(con, P1,
                                                       TEST_HOME / "profile_share.html", share=True)
     share_html = Path(share_path).read_text(encoding="utf-8")
-    assert "林夏" not in share_html, "分享版档案页泄漏了真实姓名"
+    assert P1 not in share_html, "分享版档案页泄漏了真实姓名"
     print(f"  ✅ 档案页：{len(prof['edges'])} 关系人 / 零外链 / 分享版无真名")
 
     # 3D 关系圈：单文件、零外链、分享模式脱敏
@@ -392,7 +408,21 @@ def main():
     for n in g3d["nodes"]:
         assert n.get("msg_total") is None, f"3D 分享模式仍带消息数：{n['display_name']}"
     for r in g3d.get("rooms", []):
-        assert "已脱敏" in r["name"], f"3D 分享模式群名没脱敏：{r['name']}"
+        # demo 群名本来��虚构的（source='demo'）→ 不该脱敏；
+        # 真实群名必须脱敏。测试库是 demo，所以这里只验「不出现已脱敏」。
+        assert "已脱敏" not in r["name"], f"demo 群名被脱敏了：{r['name']}"
+
+    # 8c5. 分享模式不得泄漏**原始群标识** wxroom:xxx（2026-10-28 实测漏洞）
+    #      edge.rooms 里存的是原始 room_key —— 跟 wxid 同性质，能加群的稳定标识。
+    #      而且真库有一批群名是纯数字（'8'/'5'），群名那层脱敏挡不住它。
+    import core as _core_mod
+    _probe = {"links": [{"rooms": json.dumps(["wxroom:123@chatroom"])}],
+              "rooms": [{"room_key": "wxroom:789@chatroom"}]}
+    _core_mod.scrub_room_keys(_probe)
+    assert "wxroom:" not in json.dumps(_probe, ensure_ascii=False),         "scrub_room_keys 没清掉原始群标识"
+    for _label, _txt in (("2D", ghtml), ("3D", g3d_html), ("档案", share_html)):
+        assert "wxroom:" not in _txt, f"{_label} 分享模式泄漏原始群标识"
+    print("  ✅ 分享脱敏：原始群标识 wxroom:xxx 全清（三件套实测）")
     print(f"  ✅ 3D 圈：{len(g3d['nodes'])} 节点 / {len(g3d['links'])} 边 / 零外链 / 已脱敏")
     con.close()
     assert bad == 0, f"edge.rooms 又出现覆盖不一致（{bad} 条）"

@@ -35,6 +35,50 @@ def init_db(db: Path = None) -> None:
 
 # ───────────────────────── 人 ─────────────────────────
 
+def scrub_room_keys(obj):
+    """分享模式最后一道闸：清掉所有**原始群标识**。
+
+    为什么需要（2026-10-28 实测漏洞）：
+        edge.rooms 里存的是 "wxroom:43075062746@chatroom" 这种原始 key。
+        它跟 wxid 是同一性质的东西 —— **能加群的稳定标识**。
+        而且真库有一批群名本身就是纯数字（'8' / '5'），
+        就算群名那层脱敏了，原始 key 照样从边数据里漏出去。
+
+    做法：递归走整份结构。
+        · 名为 rooms 的字段 → 换成等长的占位列表（保留「几个共同群」的信息）
+        · 其他字符串里的 wxroom:xxx → 换成占位
+    """
+    import re as _re
+    _pat = _re.compile(r"wxroom:[^\"\[\],\s]+")
+
+    def _walk(o):
+        if isinstance(o, dict):
+            for k, v in list(o.items()):
+                if k == "rooms" and isinstance(v, str) and v:
+                    try:
+                        cnt = len(json.loads(v))
+                    except Exception:
+                        cnt = 0
+                    o[k] = json.dumps([f"群{i+1}" for i in range(cnt)],
+                                     ensure_ascii=False)
+                elif k == "room_key" and isinstance(v, str):
+                    o[k] = "群"
+                else:
+                    _walk(v)
+        elif isinstance(o, list):
+            for i, v in enumerate(o):
+                if isinstance(v, str):
+                    o[i] = _pat.sub("群", v)
+                else:
+                    _walk(v)
+        elif isinstance(o, str):
+            return _pat.sub("群", o)
+        return o
+
+    _walk(obj)
+    return obj
+
+
 def upsert_person(con, person_key, display_name, **kw):
     cur = con.execute("SELECT person_key FROM person WHERE person_key=?", (person_key,))
     exists = cur.fetchone() is not None

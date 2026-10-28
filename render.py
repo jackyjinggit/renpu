@@ -171,6 +171,7 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
     uniq = [l for l in uniq if l["src"] in kset and l["dst"] in kset]
 
 
+
     # 3. 社区检测：群共现天然形成社区，一眼看出「谁跟谁是一伙的」
     import community as comm
     room_members = comm.merge_rooms_from_links(uniq)
@@ -185,6 +186,24 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
             p["community_size"] = info["size"]
         else:
             p["community"] = None
+
+    if share:
+        # 🔴 分享模式必须清 edge.rooms 里的**原始 room_key**（2026-10-28 实测漏洞）：
+        #    edge.rooms 存的是 "wxroom:43075062746@chatroom" 这种原始 key，
+        #    它跟 wxid 一样是**能加群的稳定标识**，而且真库里有一批群名
+        #    本身就是纯数字（'8'/'5'）→ 就算群名脱敏了，原始 key 仍会漏出去。
+        #
+        #    ⚠️ 位置至关重要：必须在**社区检测之后**做！
+        #    merge_rooms_from_links(uniq) 靠边里的 rooms 还原群结构 ——
+        #    提前替换成占位名后，所有边共享「群1/群2」两个假 key →
+        #    全网连成一个连通分量 → 社区检测只分出 **1 个圈**（实测踩过）。
+        for l in uniq:
+            try:
+                cnt = len(json.loads(l.get("rooms") or "[]"))
+            except Exception:
+                cnt = 0
+            l["rooms"] = json.dumps([f"群{i+1}" for i in range(cnt)],
+                                    ensure_ascii=False)
             p["community_size"] = 0
 
     # 3b. 时间维度：首次进入时间（用于时间轴滑块）
@@ -226,14 +245,19 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
     # 房间（作为图上的分组提示）
     rooms = [dict(r) for r in con.execute(
         f"SELECT room.room_key AS room_key, room.name AS name, "
+        f"       room.source AS source, "
         f"       room.member_cnt AS member_cnt, COUNT(*) AS mine "
         f"FROM room_member rm JOIN room ON room.room_key = rm.room_key "
         f"WHERE rm.person_key IN ({ph}) "
-        f"GROUP BY room.room_key, room.name, room.member_cnt "
+        f"GROUP BY room.room_key, room.name, room.source, room.member_cnt "
         f"ORDER BY mine DESC LIMIT 12", keys).fetchall()]
     if share:
         for r in rooms:
-            r["name"] = "群（已脱敏）"
+            # 只脱敏**真实**群名 —— demo 群名本来就是虚构的（source='demo'），
+            # 脱敏它只会让演示变成一堆「群（已脱敏）」，看不出圈层结构。
+            # （2026-10-28 实测：demo 演示时 24 个群全叫「群（已脱敏）」，毫无信息量）
+            if (r.get("source") or "wechat") != "demo":
+                r["name"] = "群（已脱敏）"
     return {"nodes": people, "links": uniq, "rooms": rooms,
             "share": bool(share),
             "time_axis": {"enabled": bool(fs), "min": tmin, "max": tmax,
@@ -482,18 +506,34 @@ __DATA__
       // 目标距离随关系强度增加（关系越强靠得越近）。
       // ⚠️ 私聊边的 weight 是「消息条数」（可能上千），不能像群共现那样线性用 ——
       //    否则一条 2000 条消息的私聊会把两人拉到重合。改用 log 压缩。
+      //
+    // 🔴 私聊边**只能做很弱的吸引**（2026-10-28 实测布局坍缩）：
+    //    「我」跟几十个人都有私聊边（direct 边数 = 私聊对象数），
+    //    每条都按正常强度吸引的话，「我」被几十个力同时拉 →
+    //    整张图被拽歪，节点挤成一团、长斜线拉到画布角落。
+    //    私聊是**辐射关系**（我认识你），不是**结构关系**（你和他在一个圈），
+    //    结构该由群共现边决定。所以 direct 的吸引力砍到 1/4。
       let target, f;
       if(l.kind==='direct'){
         const strength=Math.min(4, Math.log10(1+l.w)*1.6);   // 1~4 档
-        target=60+(4-strength)*22;
-        f=(d-target)*0.014*strength;
+        target=150+(4-strength)*30;                          // 目标距离拉远
+        f=(d-target)*0.004*strength;                         // 吸引力砍到 1/4
       } else {
         target=70+ (4-Math.min(l.w,4))*26;
         f=(d-target)*0.016*Math.min(l.w,4);
       }
       const ux=dx/d,uy=dy/d;a.vx+=ux*f;a.vy+=uy*f;b.vx-=ux*f;b.vy-=uy*f;});
     act.forEach(a=>{a.vx+=(W/2-a.x)*0.0022;a.vy+=(H/2-a.y)*0.0022;
-      a.vx*=0.85;a.vy*=0.85;a.x+=a.vx;a.y+=a.vy;});
+      a.vx*=0.85;a.vy*=0.85;a.x+=a.vx;a.y+=a.vy;
+      // 边界约束：把跑出画布的节点拉回来（直接钳制，最稳）。
+      // ⚠️ 没有这道约束时，实测 X 跨度能到 128%（节点被甩到画布外，
+      //    看着像图坏了）。私聊边多的时候尤其明显。
+      // ⚠️ 不要用「反弹」公式（如 m+(m-a.x)*0.5）—— 会振荡，
+      //    实测把节点全叠到同一点（X 跨度 0、Y 跨度 700 万%）。
+      const m=26;
+      if(a.x<m)a.x=m; else if(a.x>W-m)a.x=W-m;
+      if(a.y<m)a.y=m; else if(a.y>H-m)a.y=H-m;
+    });
   }
   // 迭代次数随节点数增加（稀疏图需要更多轮才聚拢）
   const ITER = Math.min(600, 200 + nodes.length*5);
@@ -515,11 +555,12 @@ __DATA__
     const ln=document.createElementNS(NS,'line');
     // 边色区分关系类型：珊瑚=群共现（圈子），青=私聊（直连）
     ln.setAttribute('stroke', isDirect? '#4ecdc4' : '#39404f');
-    // 私聊边的权重是消息条数（可能上百）→ 单独压宽度，否则会盖住图
-    const w = isDirect ? Math.min(1+Math.log10(1+l.w)*1.5, 4) : Math.min(1+l.w*0.9,6);
+    // 私聊边的权重是消息条数（可能上百）→ 单独压宽度，否则会盖住图。
+    // 而且私聊是「辐射线」，视觉上应该更细更淡 —— 结构由群共现边表达。
+    const w = isDirect ? Math.min(0.8+Math.log10(1+l.w)*0.8, 2.6) : Math.min(1+l.w*0.9,6);
     ln.setAttribute('stroke-width',w);
     // 密集时压低连线透明度：核心区连线太多会糊成一片灰
-    const op = isDirect ? Math.min(0.18+Math.log10(1+l.w)*0.14, 0.72)
+    const op = isDirect ? Math.min(0.14+Math.log10(1+l.w)*0.09, 0.5)
                         : (DENSE?0.18:Math.min(0.28+l.w*0.16,0.9));
     ln.setAttribute('opacity',DENSE?Math.min(op,0.3):op);
     gE.appendChild(ln);l.el=ln;});
@@ -970,6 +1011,10 @@ def write_graph_html(con, out_path, limit=60, min_weight=1.0, tier=None,
         parts.append(f"全库 {st['people']} 人 / {st['rooms']} 群")
         parts.append("本地生成，数据不出本机")
         subtitle = " · ".join(parts)
+    # 🔴 分享模式最后一道闸：清掉所有原始群标识（wxroom:xxx）。
+    #    必须在写 HTML 之前做 —— edge.rooms 里的原始 key 是能加群的稳定标识。
+    if share:
+        core.scrub_room_keys(graph)
     html_text = render_html(graph, title=title, subtitle=subtitle)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
