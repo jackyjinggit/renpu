@@ -500,13 +500,48 @@ def cmd_graph(a):
         print("   用浏览器打开即可（单文件，可直接发给别人）")
 
 
+def _pick_person(con, kind="center"):
+    """按关系特征挑一个人（不写死名字）。
+
+    为什么需要（2026-10-28 实测）：
+        演示库的人名是**随机生成**的，批处理里写死名字在 cmd 下还会乱码
+        （cmd 的 .cmd 文件按 GBK 解释，UTF-8 中文全变问号）→
+        所以只能传**英文特征名**，由程序自己去挑人。
+
+    kind:
+        center  —— 群共现最多的人（圈层最多的枢纽）
+        hub     —— 消息最多的人
+        private —— 只在私聊里出现、任何群里都没有的人（核心洞察的载体）
+    """
+    if kind == "hub":
+        r = con.execute("SELECT display_name FROM person WHERE person_key != 'me' "
+                        "ORDER BY msg_total DESC LIMIT 1").fetchone()
+    elif kind == "private":
+        r = con.execute(
+            "SELECT p.display_name FROM person p JOIN edge e "
+            "ON (e.src=p.person_key OR e.dst=p.person_key) AND e.kind='direct' "
+            "WHERE p.person_key != 'me' AND NOT EXISTS ("
+            "  SELECT 1 FROM edge e2 WHERE (e2.src=p.person_key OR e2.dst=p.person_key) "
+            "  AND e2.kind='co_group') ORDER BY e.weight DESC LIMIT 1").fetchone()
+    else:
+        r = con.execute(
+            "SELECT p.display_name FROM person p JOIN edge e "
+            "ON (e.src=p.person_key OR e.dst=p.person_key) AND e.kind='co_group' "
+            "WHERE p.person_key != 'me' GROUP BY p.person_key "
+            "ORDER BY COUNT(*) DESC LIMIT 1").fetchone()
+    return r[0] if r else None
+
+
 def cmd_profile(a):
     """生成人物档案页 HTML（单文件，可直接分享）。"""
     import render_profile
     con = core.connect()
     outp = Path(a.out) if a.out else (_data_home() / "exports" / "renpu-profile.html")
     outp.parent.mkdir(parents=True, exist_ok=True)
-    path, prof = render_profile.render_profile(con, a.name, outp, share=a.share)
+    who = a.name or _pick_person(con, getattr(a, "pick", "hub"))
+    if not who:
+        raise SystemExit("库里找不到可展示的人")
+    path, prof = render_profile.render_profile(con, who, outp, share=a.share)
     con.close()
     if a.json:
         out({"title": "人物档案", "file": str(path), "name": prof["name"],
@@ -553,8 +588,15 @@ def cmd_graph3d(a):
     import render3d
     con = core.connect()
     outp = Path(a.out) if a.out else (_data_home() / "renpu-graph3d.html")
+    # 不给名字时按 --pick 自动挑人（cmd 批处理里写死中文名会乱码）
+    center_key = a.person or None
+    if not center_key:
+        who_pick = _pick_person(con, getattr(a, "pick", "center"))
+        if who_pick:
+            import render3d as _r3
+            center_key = _r3.resolve_center(con, who_pick)
     path, g = render3d.write_graph_3d(
-        con, outp, center_key=a.person, limit=a.limit, share=a.share)
+        con, outp, center_key=center_key, limit=a.limit, share=a.share)
     center = next((n for n in g["nodes"] if n.get("is_center")), None)
     con.close()
     who = center["display_name"] if center else "(未知)"
@@ -650,7 +692,10 @@ def build_parser():
     s.set_defaults(fn=cmd_graph)
 
     s = sub.add_parser("profile", help="生成人物档案页 HTML（单文件）")
-    s.add_argument("name", help="人物名字或 person_key")
+    s.add_argument("name", nargs="?", default=None,
+                   help="人物名字或 person_key（不给就用 --pick 自动挑）")
+    s.add_argument("--pick", choices=("hub", "center", "private"), default="hub",
+                   help="不给名字时按什么特征挑人：hub=消息最多 center=圈最多 private=只私聊")
     s.add_argument("--share", action="store_true",
                    help="分享模式：真名脱敏、时间降级到天（可安全发给别人）")
     s.add_argument("--out", help="输出路径（默认落在数据目录）")
@@ -668,7 +713,10 @@ def build_parser():
     s.set_defaults(fn=cmd_export_vault)
 
     s = sub.add_parser("graph3d", help="生成 3D 关系圈聚光 HTML（聚焦某人的关系结构）")
-    s.add_argument("--person", help="中心人物的名字或 person_key（默认自动选关系最多的人）")
+    s.add_argument("--person", default="",
+                   help="中心人物的名字或 person_key（默认自动选关系最多的人）")
+    s.add_argument("--pick", choices=("hub", "center", "private"), default="center",
+                   help="不给名字时按什么特征挑人：hub=消息最多 center=圈最多 private=只私聊")
     s.add_argument("--limit", type=int, default=36, help="最多放多少人进球面（默认 36）")
     s.add_argument("--share", action="store_true",
                    help="分享模式：群名脱敏、隐藏消息数（可安全发给别人）")
