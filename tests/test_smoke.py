@@ -206,7 +206,7 @@ def main():
     #      同时不能误伤普通英文（误伤会让正常消息看起来被审查过）
     import core as core_mod
     must_hide = [
-        ("wxid_aaaa1111bbbb2222: 内容", "微信id"),
+        ("wxid_TESTID0001: 内容", "微信id"),
         ("手机 13812345678", "手机"),
         ("邮箱 zhangsan@example.com", "邮箱"),
         ("QQ 12345678", "QQ号"),
@@ -220,8 +220,8 @@ def main():
     # 关键回归点：Python 的  只认 ASCII 词字符，
     # 「wxid_xxx退群了」里 wxid 后直接跟中文 → 无边界 → 旧正则漏遮。
     # 必须用负向前瞻而不是 。
-    for txt in ("wxid_cccc3333dddd4444退群了，祝他早日财富自由",
-                "[微信id]: wxid_eeee5555ffff6666退群了",
+    for txt in ("wxid_TESTID0002退群了，祝他早日财富自由",
+                "[微信id]: wxid_TESTID0003退群了",
                 "邮箱 zhangsan@example.com 收到"):
         out, hit = core_mod.mask_pii(txt)
         assert hit, f"中文紧跟时没遮住：{txt} → {out}"
