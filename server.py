@@ -666,6 +666,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _handle_cph_webhook(self, raw: bytes):
+        """ClawHunt webhook 端点（2026-10-29）。
+
+        处理两类事件：
+          · capability_probe → 能力探针（file_transfer / visual_observation）
+          · task_assignment → 任务分配（ack）
+
+        ⚠️ 15 秒硬超时（非 200 直接 0 分），所以探针里的下载要快。
+        """
+        import clawhunt
+        try:
+            event = json.loads(raw or b"{}")
+        except Exception:
+            self._send({"error": "invalid json"}, 400)
+            return
+        # 验签是可选的（secret 为 null 时平台用空密钥签名）→ 有 secret 就验
+        secret = None
+        try:
+            sec_file = Path(EXPORT_DIR) / "clawhunt_secret.txt"
+            if sec_file.exists():
+                secret = sec_file.read_text(encoding="utf-8").strip() or None
+        except Exception:
+            secret = None
+        # ⚠️ secret 为 None 时，平台用**空密钥**签名 →
+        #    这时也要验（用空字符串当 key），否则会拒掉平台的合法请求。
+        #    但如果请求里根本没有签名头 → 跳过（验签是可选的）。
+        if self.headers.get("X-CPH-Probe-Signature"):
+            if not clawhunt.verify_signature(self.headers, raw, secret):
+                self._send({"error": "signature mismatch"}, 401)
+                return
+        code, out = clawhunt.build_response(event, secret)
+        self._send(out, code)
+
     def do_GET(self):
         u = urlparse(self.path)
         # 🔴 查询串必须做 UTF-8 解码（2026-10-29 实测）：
@@ -743,7 +776,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         n = int(self.headers.get("Content-Length", 0))
-        payload = json.loads(self.rfile.read(n) or b"{}") if n else {}
+        raw = self.rfile.read(n) if n else b""
+        # 🔴 ClawHunt webhook：签名基于**原始 body 字节**，
+        #    解析后重新序列化会对不上 → 必须先拿 raw。
+        if u.path in ("/cph-webhook", "/api/cph-webhook"):
+            self._handle_cph_webhook(raw)
+            return
+        payload = json.loads(raw or b"{}") if raw else {}
         con = core.connect()
         try:
             if u.path == "/api/note":
