@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>仁谱 · 圈层画像 v2 · 消息量 ≠ 关系深度</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1c2029; --line:#272c37;
+  --tx:#e8eaf0; --tx2:#9aa3b5; --tx3:#6b7488;
+  --coral:#ff7a6b; --teal:#4ecdc4; --amber:#ffd166; --violet:#a78bfa;
+  --green:#86efac; --blue:#7dd3fc; --pink:#f472b6;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;line-height:1.6;padding:0 0 80px}
+.wrap{max-width:1180px;margin:0 auto;padding:0 32px}
+header{padding:64px 0 40px;border-bottom:1px solid var(--line);margin-bottom:48px}
+.kicker{font-size:12px;letter-spacing:.22em;color:var(--coral);font-weight:600;margin-bottom:16px}
+h1{font-size:44px;font-weight:700;letter-spacing:-.02em;line-height:1.2;margin-bottom:18px}
+h1 em{font-style:normal;color:var(--coral)}
+.lead{font-size:17px;color:var(--tx2);max-width:760px}
+.lead b{color:var(--tx);font-weight:600}
+section{margin-bottom:56px}
+h2{font-size:13px;letter-spacing:.16em;color:var(--tx3);font-weight:600;
+  margin-bottom:22px;display:flex;align-items:center;gap:12px}
+h2::after{content:"";flex:1;height:1px;background:var(--line)}
+
+/* 承认错误 */
+.admit{background:linear-gradient(135deg,rgba(255,122,107,.09),rgba(78,205,196,.06));
+  border:1px solid var(--line);border-left:3px solid var(--coral);border-radius:12px;padding:28px 32px;margin:24px 0}
+.admit .big{font-size:28px;font-weight:700;letter-spacing:-.02em;line-height:1.3;margin-bottom:16px}
+.admit .big b{color:var(--coral)}
+.admit .small{font-size:15px;color:var(--tx2)}
+.admit .small b{color:var(--tx)}
+
+/* 数据证明 */
+.proof{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin:24px 0}
+.proof .item{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
+.proof .name{font-size:16px;font-weight:600;margin-bottom:8px}
+.proof .name b{color:var(--coral)}
+.proof .data{font-size:13px;color:var(--tx2);line-height:1.8}
+.proof .data b{color:var(--tx)}
+.proof .verdict{font-size:13px;color:var(--coral);margin-top:8px;font-weight:600}
+
+/* 新标准 */
+.standard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:24px;margin:24px 0}
+.standard h3{font-size:18px;font-weight:600;margin-bottom:16px;color:var(--teal)}
+.standard .rule{display:flex;align-items:center;gap:12px;margin-bottom:12px;font-size:15px}
+.standard .rule .num{width:28px;height:28px;border-radius:50%;background:var(--teal);color:var(--bg);
+  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex:0 0 auto}
+.standard .rule .text{color:var(--tx2)}
+.standard .rule .text b{color:var(--tx)}
+
+/* 现状 */
+.current{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:24px 0}
+.cur{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;text-align:center}
+.cur .n{font-size:36px;font-weight:700;letter-spacing:-.02em;line-height:1.1;font-variant-numeric:tabular-nums}
+.cur .n.c{color:var(--coral)} .cur .n.t{color:var(--teal)} .cur .n.a{color:var(--amber)}
+.cur .l{font-size:12.5px;color:var(--tx3);margin-top:8px}
+.cur .s{font-size:11.5px;color:var(--tx3);margin-top:6px}
+
+/* 建议 */
+.advice{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:24px 0}
+.adv{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
+.adv .ic{font-size:22px;margin-bottom:10px}
+.adv h3{font-size:15px;font-weight:600;margin-bottom:8px}
+.adv p{font-size:13.5px;color:var(--tx2)}
+.adv p b{color:var(--tx)}
+
+footer{border-top:1px solid var(--line);padding-top:24px;color:var(--tx3);font-size:12.5px;
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-top:48px}
+@media(max-width:820px){
+  .proof,.current,.advice{grid-template-columns:1fr}
+  h1{font-size:32px}.wrap{padding:0 20px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">RENPU · 仁谱 · 圈层画像 v2</div>
+  <h1>消息量 ≠ 关系深度</h1>
+  <p class="lead">
+    关系人 A消息量第一（2475 条）但已决裂；isolate 的 2 人在核心圈但你说他们是精致利己；
+    线下样本 A只有 22 条消息但你说他"线下见面并且愉快"；线下样本 B 0 条消息但你点名他。
+    <strong>这些事实证明：消息量不是关系深度的度量。</strong>
+  </p>
+</header>
+
+<!-- ① 承认错误 -->
+<section>
+  <h2>01 · 承认错误：我的报告错了</h2>
+  <div class="admit">
+    <div class="big">我用消息量当深度，<strong>这是错的</strong>。</div>
+    <div class="small">
+      上一版报告说"核心圈 233 人是真实的"，但<strong>isolate 的 2 人就在核心圈里</strong>——
+      他们有私聊边 + 群共现，按我的标准是"核心圈"，但你说他们是<strong>精致利己</strong>。<br><br>
+      <strong>消息量 ≠ 关系深度</strong>。关系人 A消息量第一但已决裂；线下样本 A只有 22 条消息但你说他"线下见面并且愉快"。
+    </div>
+  </div>
+</section>
+
+<!-- ② 数据证明 -->
+<section>
+  <h2>02 · 数据证明：你是对的</h2>
+  <div class="proof">
+    <div class="item">
+      <div class="name"><b>isolate 样本 A</b>（isolate）</div>
+      <div class="data">消息 <b>46</b> 条 | 私聊边 <b>1</b> 条（44）| 群共现 <b>2</b> 个</div>
+      <div class="verdict">按我的标准：核心圈 ✅ | 按你的标准：精致利己 ❌</div>
+    </div>
+    <div class="item">
+      <div class="name"><b>isolate 样本 B</b>（isolate）</div>
+      <div class="data">消息 <b>41</b> 条 | 私聊边 <b>1</b> 条（38）| 群共现 <b>2</b> 个</div>
+      <div class="verdict">按我的标准：核心圈 ✅ | 按你的标准：精致利己 ❌</div>
+    </div>
+    <div class="item">
+      <div class="name"><b>线下样本 A</b>（你点名）</div>
+      <div class="data">消息 <b>22</b> 条 | 私聊边 <b>1</b> 条（22）| 群共现 <b>1</b> 个</div>
+      <div class="verdict">按我的标准：弱关系 ❌ | 按你的标准：线下见面愉快 ✅</div>
+    </div>
+    <div class="item">
+      <div class="name"><b>线下样本 B</b>（你点名）</div>
+      <div class="data">消息 <b>0</b> 条 | 私聊边 <b>0</b> 条 | 群共现 <b>0</b> 个</div>
+      <div class="verdict">按我的标准：不在关系谱 ❌ | 按你的标准：线下见面愉快 ✅</div>
+    </div>
+  </div>
+  <p class="muted" style="font-size:13px;color:var(--tx3);margin-top:12px">
+    <strong>isolate 的 2 人在核心圈</strong>（有私聊边 + 群共现），但你说他们是精致利己；
+    <strong>线下样本 A只有 22 条消息</strong>，按我的标准是"弱关系"，但你说他"线下见面并且愉快"；
+    <strong>线下样本 B 0 条消息</strong>，完全不在"关系谱"里，但你点名他。
+  </p>
+</section>
+
+<!-- ③ 新标准 -->
+<section>
+  <h2>03 · 你的标准：线下见面 + 愉快 + 非 isolate</h2>
+  <div class="standard">
+    <h3>什么是真正的关系</h3>
+    <div class="rule"><div class="num">1</div><div class="text"><b>线下见面</b> —— 不是"你认识多少人"，而是"谁真的跟你线下见过"</div></div>
+    <div class="rule"><div class="num">2</div><div class="text"><b>愉快</b> —— 见面时是否愉快，不是"谁跟你消息多"</div></div>
+    <div class="rule"><div class="num">3</div><div class="text"><b>非 isolate</b> —— 排除你标记为"精致利己"的人</div></div>
+  </div>
+</section>
+
+<!-- ④ 现状 -->
+<section>
+  <h2>04 · 现状：仁谱只捕捉了"线上消息"</h2>
+  <div class="current">
+    <div class="cur"><div class="n c">233</div><div class="l">核心圈（线上关系）</div><div class="s">私聊 + 群共现</div></div>
+    <div class="cur"><div class="n t">2</div><div class="l">其中 isolate</div><div class="s">精致利己但有线上关系</div></div>
+    <div class="cur"><div class="n a">0</div><div class="l">线下见面数据</div><div class="s">目前完全没有</div></div>
+  </div>
+  <p class="muted" style="font-size:13px;color:var(--tx3);margin-top:12px">
+    仁谱的"关系谱"目前只捕捉了<strong>线上消息</strong>（私聊 + 群共现），
+    <strong>完全没捕捉"线下关系"</strong>（见面、愉快、isolate）。这是<strong>产品级的盲区</strong>，不是数据问题。
+  </p>
+</section>
+
+<!-- ⑤ 建议 -->
+<section>
+  <h2>05 · 建议：怎么把"线下见面"加进来</h2>
+  <div class="advice">
+    <div class="adv">
+      <div class="ic">📍</div>
+      <h3>加"线下见面"维度</h3>
+      <p>仁谱需要一个新的数据维度：<strong>线下见面记录</strong>。
+      谁跟你见过、什么时候、在哪里、是否愉快 —— 这些<strong>目前完全没有</strong>，需要手动标注。</p>
+    </div>
+    <div class="adv">
+      <div class="ic">🏷</div>
+      <h3>把 isolate 用起来</h3>
+      <p>isolate 标记在 <code>identity.signature</code> 里（张镇源、isolate 样本 A、richard、isolate 样本 B）。
+      仁谱应该<strong>排除或降权</strong>这些人 —— 他们不是"核心圈"，是"精致利己"。</p>
+    </div>
+    <div class="adv">
+      <div class="ic">🎯</div>
+      <h3>重新设计度量</h3>
+      <p>从"消息量"转向"<strong>线下见面 + 愉快 + 非 isolate</strong>"。
+      消息量只是<strong>线上活跃度</strong>，不是<strong>关系深度</strong>。
+      真正的关系需要<strong>线下验证</strong>。</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <span>仁谱 Renpu · 圈层画像 v2 · 2026-10-29</span>
+  <span>数据全部来自本机微信库 · 已脱敏</span>
+</footer>
+
+</div>
+</body>
+</html>
