@@ -178,6 +178,12 @@ def collect_neighbourhood(con, center_key, max_people=36, share=False, depth=2):
             # （2026-10-28 实测：demo 演示时 24 个群全叫「群（已脱敏）」，毫无信息量）
             if (r.get("source") or "wechat") != "demo":
                 r["name"] = "群（已脱敏）"
+        # 🔴 room_key 也要脱敏（2026-10-29 真库公网扫描实测）：
+        #    群节点自带 room_key（"wxroom:43075062746@chatroom"）——
+        #    它跟 wxid 同性质，是**能加群的稳定标识**。
+        #    编号化：换成「群1/群2…」→ 保留结构，去掉标识。
+        import core as _core
+        _core.scrub_room_keys(rooms)
     return {"nodes": nodes, "links": links, "rooms": rooms, "center": center_key}
 
 

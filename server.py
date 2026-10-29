@@ -20,7 +20,7 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -42,7 +42,7 @@ def api_stats(con):
     return core.stats(con)
 
 
-def api_people(con, days=None, q=None, limit=30):
+def api_people(con, days=None, q=None, limit=30, share=True):
     where, vals = [], []
     if days:
         where.append("last_active > ?"); vals.append(time.time() - days * 86400)
@@ -56,10 +56,22 @@ def api_people(con, days=None, q=None, limit=30):
         r["last_seen"] = time.strftime("%Y-%m-%d", time.localtime(r["last_active"])) if r["last_active"] else None
         r["tags"] = core.person_tags(con, r["person_key"])
         r.pop("last_active")
+    # 🔴 脱敏：person_key 在真实库里是 wxid_xxx（能加人的稳定标识）
+    if share and not _is_demo_store(con):
+        for i, r in enumerate(rows, 1):
+            r["person_key"] = f"关系人{i}"
+            if r.get("display_name"):
+                r["display_name"] = f"关系人{i}"
     return {"count": len(rows), "rows": rows}
 
 
-def api_who(con, name, limit=30):
+def api_who(con, name, limit=30, share=True):
+    # 🔴 同 search/feed：who 返回**消息正文**（snippet）——
+    #    2026-10-29 真库公网扫描实测命中 16 个 wxid + 6 个真名。
+    #    真实库 + share 模式下禁用（公网 Agent 用演示库）。
+    if share and not _is_demo_store(con):
+        raise ApiError("who 端点在真实库上已禁用（消息正文含 PII）。"
+                       "公网 Agent 请用演示库；本地调试加 share=0。")
     p = core.get_person(con, name)
     if not p:
         return {"found": False, "query": name,
@@ -68,25 +80,39 @@ def api_who(con, name, limit=30):
     pk = p["person_key"]
     ident = con.execute("SELECT * FROM identity WHERE person_key=?", (pk,)).fetchone()
     msgs = [dict(r) for r in con.execute(
-        "SELECT ts, dir, snippet FROM msg_index WHERE conv_key=? ORDER BY ts DESC LIMIT ?", (pk, limit)).fetchall()]
+        "SELECT ts, dir, sender, snippet FROM msg_index WHERE conv_key=? ORDER BY ts DESC LIMIT ?", (pk, limit)).fetchall()]
     for m in msgs:
         m["when"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(m["ts"]))
         m["who"] = "我" if m["dir"] else (con.execute(
             "SELECT display_name FROM person WHERE person_key=?", (m["sender"],)).fetchone() or ["?"])[0]
-        m.pop("ts"); m.pop("dir"); m.pop("sender")
+        m.pop("ts", None); m.pop("dir", None); m.pop("sender", None)
+    if share and not _is_demo_store(con):
+        p = dict(p)
+        p["person_key"] = "关系人"
+        if p.get("display_name"):
+            p["display_name"] = "关系人"
+        if p.get("real_name"):
+            p["real_name"] = "关系人"
     return {"found": True, "profile": dict(p), "tags": core.person_tags(con, pk),
             "identity": dict(ident) if ident else None, "recent": msgs,
             "rooms": [r[0].split(":", 1)[-1] for r in con.execute(
                 "SELECT room_key FROM room_member WHERE person_key=?", (pk,)).fetchall()],
             "edges": [dict(r) for r in con.execute(
-                "SELECT dst AS to, kind, weight FROM edge WHERE src=? ORDER BY weight DESC LIMIT 15", (pk,)).fetchall()],
+                "SELECT dst AS \"to\", kind, weight FROM edge WHERE src=? ORDER BY weight DESC LIMIT 15", (pk,)).fetchall()],
             "todos": [dict(r) for r in con.execute(
                 "SELECT todo_id, kind, title, due FROM todo WHERE person_key=? AND status='open'", (pk,)).fetchall()],
             "events": [dict(r) for r in con.execute(
                 "SELECT kind, ts, title, detail FROM event WHERE person_key=? ORDER BY ts DESC LIMIT 10", (pk,)).fetchall()]}
 
 
-def api_search(con, q, limit=30):
+def api_search(con, q, limit=30, share=True):
+    # 🔴 搜索结果 = 消息正文（2026-10-29 真库公网扫描实测）：
+    #    snippet 里含真名、群名、wxid、原始群 key —— 全都漏出去。
+    #    搜索的价值就是**内容本身**，脱敏后等于无效 →
+    #    所以真实库 + share 模式下**明确禁用**，而不是给一份没意义的脱敏结果。
+    if share and not _is_demo_store(con):
+        raise ApiError("search 端点在真实库上已禁用（消息正文含 PII）。"
+                       "公网 Agent 请用演示库；本地调试加 share=0。")
     rows = core.search_messages(con, q, limit=limit)
     for r in rows:
         r["when"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["ts"]))
@@ -96,7 +122,11 @@ def api_search(con, q, limit=30):
     return {"query": q, "count": len(rows), "rows": rows}
 
 
-def api_feed(con, days=7, limit=50):
+def api_feed(con, days=7, limit=50, share=True):
+    # 🔴 同 search：feed 返回消息正文，真实库 + share 模式下禁用。
+    if share and not _is_demo_store(con):
+        raise ApiError("feed 端点在真实库上已禁用（消息正文含 PII）。"
+                       "公网 Agent 请用演示库；本地调试加 share=0。")
     rows = [dict(r) for r in con.execute(
         "SELECT m.ts, m.dir, m.snippet, m.sender FROM msg_index m WHERE m.ts>? ORDER BY m.ts DESC LIMIT ?",
         (time.time() - days * 86400, limit)).fetchall()]
@@ -108,22 +138,66 @@ def api_feed(con, days=7, limit=50):
     return {"days": days, "count": len(rows), "rows": rows}
 
 
-def api_rooms(con, limit=30):
+def api_rooms(con, limit=30, share=True):
     rows = [dict(r) for r in con.execute(
         "SELECT room_key, name, member_cnt, msg_total, last_active FROM room ORDER BY msg_total DESC LIMIT ?",
         (limit,)).fetchall()]
     for r in rows:
         r["last_seen"] = time.strftime("%Y-%m-%d", time.localtime(r["last_active"])) if r["last_active"] else None
         r.pop("last_active")
+        # 🔴 脱敏：room_key 是**能加群的稳定标识**（跟 wxid 同性质），
+        #    群名也可能是纯数字（'8'/'5'）→ 群名那层脱敏挡不住它。
+        #    这个端点现在暴露在公网（ClawHunt webhook），必须默认脱敏。
+        if share:
+            r["room_key"] = "群"
+            src = (r.get("name") or "")
+            if (con.execute("SELECT source FROM room WHERE name = ? LIMIT 1", (src,)).fetchone()
+                    or ["wechat"])[0] != "demo":
+                r["name"] = "群（已脱敏）"
     return {"count": len(rows), "rows": rows}
 
 
-def api_edges(con, limit=40):
-    return {"count": limit, "rows": [dict(r) for r in con.execute(
+def api_edges(con, limit=40, share=True):
+    rows = [dict(r) for r in con.execute(
         "SELECT src, dst, kind, weight, src_name, dst_name FROM ("
         "SELECT e.src, e.dst, e.kind, e.weight, s.display_name AS src_name, d.display_name AS dst_name "
         "FROM edge e LEFT JOIN person s ON s.person_key=e.src LEFT JOIN person d ON d.person_key=e.dst) "
-        "ORDER BY weight DESC LIMIT ?", (limit,)).fetchall()]}
+        "ORDER BY weight DESC LIMIT ?", (limit,)).fetchall()]
+    # 🔴 脱敏：src/dst 是 person_key —— 真实库里是 wxid_xxx，
+    #    那是**能加人的稳定标识**。这个端点暴露在公网，必须换掉。
+    #
+    #    按数据源分：demo 的人物名本来就是虚构的 → 保留（保留图谱可读性）；
+    #    真实库的名字是真名 → 连 key 带名字一起换。
+    if share:
+        is_demo = _is_demo_store(con)
+        for r in rows:
+            if is_demo:
+                r["src"] = _demo_key(r["src"])
+                r["dst"] = _demo_key(r["dst"])
+            else:
+                r["src"] = "关系人"
+                r["dst"] = "关系人"
+                r["src_name"] = "关系人"
+                r["dst_name"] = "关系人"
+    return {"count": len(rows), "rows": rows}
+
+
+def _is_demo_store(con):
+    """这个库里的人是不是 demo 数据（虚构人物）。"""
+    try:
+        r = con.execute("SELECT source FROM person WHERE source='demo' LIMIT 1").fetchone()
+        return bool(r)
+    except Exception:
+        return False
+
+
+def _demo_key(key):
+    """demo 库里的 person_key 形如 wx:demo_003 → wx:demo_003（本身不敏感，
+    但保留 'me' 这种语义）。真实库里是 wxid_xxx，必须换掉。"""
+    k = str(key or "")
+    if k.startswith("wxid_") or (k.startswith("wx:") and "demo" not in k):
+        return "关系人"
+    return k
 
 
 def api_todos(con):
@@ -514,6 +588,12 @@ def api_graph3d(con, person="", limit=36, share=True, fmt="json"):
     g = render3d.collect_neighbourhood(con, center_key, max_people=limit, share=share)
     if share:
         _assert_unique_keys(g)
+        # 🔴 center 字段是**原始 person_key**（真实库里是 wxid_xxx）——
+        #    2026-10-29 真库公网扫描实测命中。
+        #    节点和边都脱敏了，中心人物却漏了 —— 单独处理。
+        _c = g.get("center")
+        if _c and _c != "me" and "wxid_" in str(_c):
+            g["center"] = "关系人"
     g["count"] = len(g.get("nodes") or [])
     g["share"] = bool(share)
     return g
@@ -564,6 +644,8 @@ ENDPOINTS = [
     {"path": "/api/note", "method": "POST",
      "desc": "记一条事件/待办；body {text, name?, kind?, todo?}"},
     {"path": "/api/todo/close", "method": "POST", "desc": "关掉一条待办；body {todo_id}"},
+    {"path": "/api/webhook", "method": "POST",
+     "desc": "ClawHunt 回调端点：接收任务，返回结果（Agent 接单）"},
 ]
 
 
@@ -586,7 +668,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
-        q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        # 🔴 查询串必须做 UTF-8 解码（2026-10-29 实测）：
+        #    Agent 传中文人名（?name=袁俊琦）时，不解码会抛
+        #    'ascii' codec can't encode characters → HTTP 500。
+        q = {k: unquote(v[0]) for k, v in parse_qs(u.query, encoding="utf-8").items()}
         con = None
         try:
             con = core.connect()
@@ -598,17 +683,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(api_stats(con))
             elif u.path == "/api/people":
                 self._send(api_people(con, days=int(q["days"]) if "days" in q else None,
-                                      q=q.get("q"), limit=int(q.get("limit", 30))))
+                                      q=q.get("q"), limit=int(q.get("limit", 30)),
+                                      share=_flag(q, "share", True)))
             elif u.path == "/api/who":
-                self._send(api_who(con, q.get("name", ""), int(q.get("limit", 30))))
+                self._send(api_who(con, q.get("name", ""), int(q.get("limit", 30)),
+                                   share=_flag(q, "share", True)))
             elif u.path == "/api/search":
-                self._send(api_search(con, q.get("q", ""), int(q.get("limit", 30))))
+                self._send(api_search(con, q.get("q", ""), int(q.get("limit", 30)),
+                                      share=_flag(q, "share", True)))
             elif u.path == "/api/feed":
-                self._send(api_feed(con, int(q.get("days", 7)), int(q.get("limit", 50))))
+                self._send(api_feed(con, int(q.get("days", 7)), int(q.get("limit", 50)),
+                                    share=_flag(q, "share", True)))
             elif u.path == "/api/rooms":
-                self._send(api_rooms(con, int(q.get("limit", 30))))
+                self._send(api_rooms(con, int(q.get("limit", 30)),
+                                     share=_flag(q, "share", True)))
             elif u.path == "/api/edges":
-                self._send(api_edges(con, int(q.get("limit", 40))))
+                self._send(api_edges(con, int(q.get("limit", 40)),
+                                     share=_flag(q, "share", True)))
             elif u.path == "/api/todos":
                 self._send(api_todos(con))
             elif u.path == "/api/endpoints":
@@ -671,6 +762,36 @@ class Handler(BaseHTTPRequestHandler):
                             (time.time(), payload.get("todo_id")))
                 con.commit()
                 self._send({"ok": True})
+            elif u.path == "/api/webhook":
+                # ClawHunt 回调端点：接收任务，返回结果（Agent 接单）
+                # 格式：{"task": "...", "input": {...}} → 返回 {"result": "...", "output": {...}}
+                task = payload.get("task", "")
+                inp = payload.get("input", {})
+                if task == "graph":
+                    # 生成关系图谱
+                    limit = inp.get("limit", 60)
+                    share = inp.get("share", True)
+                    out = api_graph(con, limit=limit, share=share, fmt="json")
+                    self._send({"result": "graph", "output": out})
+                elif task == "profile":
+                    # 生成人物档案
+                    name = inp.get("name", "")
+                    share = inp.get("share", True)
+                    out = api_profile(con, name, share=share)
+                    self._send({"result": "profile", "output": out})
+                elif task == "graph3d":
+                    # 生成 3D 关系圈
+                    person = inp.get("person", "")
+                    limit = inp.get("limit", 36)
+                    share = inp.get("share", True)
+                    out = api_graph3d(con, person=person, limit=limit, share=share, fmt="json")
+                    self._send({"result": "graph3d", "output": out})
+                elif task == "stats":
+                    # 全局统计
+                    out = api_stats(con)
+                    self._send({"result": "stats", "output": out})
+                else:
+                    self._send({"error": f"unknown task: {task}"}, 400)
             else:
                 self._send({"error": "no such endpoint"}, 404)
         except Exception as e:

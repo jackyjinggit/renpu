@@ -51,6 +51,17 @@ def scrub_room_keys(obj):
     import re as _re
     _pat = _re.compile(r"wxroom:[^\"\[\],\s]+")
 
+    # 群 key → 编号（保留结构，去掉标识）
+    # ⚠️ 不能全换成同一个「群」—— 那样所有群在图谱里变成同一个节点，
+    #    群共现结构全丢（实测：群列表节点自带 room_key，脱敏后全变「群」）。
+    _idmap = {}
+
+    def _rid(key):
+        k = str(key)
+        if k not in _idmap:
+            _idmap[k] = f"群{len(_idmap)+1}"
+        return _idmap[k]
+
     def _walk(o):
         if isinstance(o, dict):
             for k, v in list(o.items()):
@@ -62,7 +73,7 @@ def scrub_room_keys(obj):
                     o[k] = json.dumps([f"群{i+1}" for i in range(cnt)],
                                      ensure_ascii=False)
                 elif k == "room_key" and isinstance(v, str):
-                    o[k] = "群"
+                    o[k] = _rid(v)
                 else:
                     _walk(v)
         elif isinstance(o, list):

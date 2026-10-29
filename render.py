@@ -258,6 +258,13 @@ def collect_graph(con, limit=60, min_weight=1.0, tier=None, focus=None, share=Fa
             # （2026-10-28 实测：demo 演示时 24 个群全叫「群（已脱敏）」，毫无信息量）
             if (r.get("source") or "wechat") != "demo":
                 r["name"] = "群（已脱敏）"
+        # 🔴 room_key 也要脱敏（2026-10-29 真库公网扫描实测）：
+        #    群节点自带 room_key（"wxroom:43075062746@chatroom"）——
+        #    它跟 wxid 同性质，是**能加群的稳定标识**。
+        #    用统一的编号化闸：换成「群1/群2…」→ 保留结构（群共现还能画），
+        #    去掉标识（不能全换同一个「群」，那样所有群塌成一个节点）。
+        import core as _core
+        _core.scrub_room_keys(rooms)
     return {"nodes": people, "links": uniq, "rooms": rooms,
             "share": bool(share),
             "time_axis": {"enabled": bool(fs), "min": tmin, "max": tmax,

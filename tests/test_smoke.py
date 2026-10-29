@@ -398,6 +398,43 @@ def main():
     print(f"  ✅ 档案页：{len(prof['edges'])} 关系人 / 零外链 / 分享版无真名")
 
     # 3D 关系圈：单文件、零外链、分享模式脱敏
+    # 8c7. 公网 Agent 的 PII 红线（2026-10-29 真库实测踩出来的）
+    #      背景：为了上架 ClawHunt，把 API 暴露到公网 →
+    #      扫真库发现 **9 个端点漏 PII**（wxid / 真名 / 原始群 key / 消息正文）。
+    #      这条断言防止改回去。
+    import server as _srv
+    # ⚠️ 必须连**真库**测 —— 测试库是 demo 库，
+    #    而 demo 库不触发「正文端点禁用」分支（那是设计如此）→
+    #    用 demo 库测会假失败（2026-10-29 实测踩过）。
+    # 真库路径走环境变量 —— **不硬编码**（公开仓不能有作者的本机路径）
+    _REAL_DB = Path(os.environ.get("RENPU_REAL_DB", ""))
+    if not _REAL_DB.exists() or not str(_REAL_DB):
+        print("  ⚠️ 跳过公网 PII 红线检查（设 RENPU_REAL_DB 指向真库才会跑）")
+    else:
+        _con2 = core.connect(_REAL_DB)
+        _real_rooms = [r[0] for r in _con2.execute(
+            "SELECT room_key FROM room LIMIT 50").fetchall()]
+        _real_rooms = [k for k in _real_rooms if k and "wxroom:" in k]
+        _wxids = [r[0] for r in _con2.execute(
+            "SELECT person_key FROM person LIMIT 50").fetchall()]
+        _wxids = [k for k in _wxids if k and "wxid_" in k]
+        # 三个「返回消息正文」的端点：真实库 + share 模式必须**明确禁用**
+        for _fn, _args in ((_srv.api_search, ("黑客松",)), (_srv.api_feed, ()), (_srv.api_who, ("x",))):
+            try:
+                _fn(_con2, *_args, share=True)
+                raise AssertionError(f"{_fn.__name__} 真实库 share 模式没禁用 → 会漏消息正文 PII")
+            except Exception as _e:
+                if "已禁用" not in str(_e):
+                    raise
+        # 结构化端点：room_key 与 wxid 都不能出现
+        for _fn, _args in ((_srv.api_rooms, ()), (_srv.api_edges, ()), (_srv.api_people, ()),
+                           (_srv.api_graph, ()), (_srv.api_graph3d, ())):
+            _out = json.dumps(_fn(_con2, *_args, share=True), ensure_ascii=False, default=str)
+            for _bad in (_real_rooms + _wxids):
+                assert _bad not in _out, f"{_fn.__name__} 泄漏了 {_bad}"
+        _con2.close()
+        print("  ✅ 公网 Agent PII 红线：3 个正文端点已禁用 / 5 个结构端点零泄漏")
+
     import render3d
     g3d_path, g3d = render3d.write_graph_3d(con, TEST_HOME / "g3d.html",
                                              limit=12, share=True)
