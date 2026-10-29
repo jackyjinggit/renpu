@@ -669,7 +669,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         # 🔴 查询串必须做 UTF-8 解码（2026-10-29 实测）：
-        #    Agent 传中文人名（?name=袁俊琦）时，不解码会抛
+        #    Agent 传中文人名（?name=<中文名>）时，不解码会抛
         #    'ascii' codec can't encode characters → HTTP 500。
         q = {k: unquote(v[0]) for k, v in parse_qs(u.query, encoding="utf-8").items()}
         con = None
