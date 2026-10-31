@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>仁谱 Renpu · 关系图谱引擎</title>
+<style>
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0f1115; color: #e8eaf0;
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased; line-height: 1.6;
+}
+.page {
+  width: 210mm; height: 297mm; padding: 26mm 24mm;
+  page-break-after: always; position: relative; overflow: hidden;
+  background: #0f1115;
+}
+.page:last-child { page-break-after: auto; }
+.kicker { font-size: 11px; letter-spacing: .22em; color: #ff7a6b; font-weight: 600; margin-bottom: 18px; }
+h1 { font-size: 52px; font-weight: 700; letter-spacing: -.02em; line-height: 1.15; margin-bottom: 18px; }
+h1 em { font-style: normal; color: #ff7a6b; }
+.lead { font-size: 19px; color: #9aa3b5; max-width: 600px; line-height: 1.75; }
+.lead b { color: #e8eaf0; font-weight: 600; }
+h2 { font-size: 13px; letter-spacing: .16em; color: #6b7488; font-weight: 600; margin-bottom: 22px; }
+.sub { font-size: 13px; color: #6b7488; margin-bottom: 8px; }
+.foot { position: absolute; bottom: 20mm; left: 24mm; right: 24mm;
+  display: flex; justify-content: space-between; color: #6b7488; font-size: 11.5px;
+  border-top: 1px solid #272c37; padding-top: 14px; }
+.big { font-size: 40px; font-weight: 700; letter-spacing: -.02em; line-height: 1.2; margin-bottom: 14px; }
+.big b { color: #ff7a6b; }
+
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 26px; }
+.card { background: #171a21; border: 1px solid #272c37; border-radius: 12px; padding: 22px; }
+.card .n { font-size: 34px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+.card .l { font-size: 12.5px; color: #9aa3b5; margin-top: 8px; }
+.card .s { font-size: 11.5px; color: #6b7488; margin-top: 6px; }
+.c { color: #ff7a6b; } .t { color: #4ecdc4; } .a { color: #ffd166; } .v { color: #a78bfa; }
+.g { color: #86efac; } .b { color: #7dd3fc; }
+
+.funnel { display: flex; align-items: center; justify-content: space-between; margin: 26px 0 8px; }
+.funnel .step { flex: 1; text-align: center; position: relative; }
+.funnel .step:not(:last-child)::after { content: "→"; position: absolute; right: -14px; top: 38%;
+  color: #6b7488; font-size: 20px; }
+.funnel .n { font-size: 38px; font-weight: 700; letter-spacing: -.02em; }
+.funnel .l { font-size: 13px; color: #9aa3b5; margin-top: 6px; }
+.funnel .s { font-size: 11px; color: #6b7488; margin-top: 4px; }
+
+.quote { background: #171a21; border-left: 3px solid #ff7a6b; border-radius: 10px;
+  padding: 22px 26px; margin: 22px 0; }
+.quote .t { font-size: 22px; font-weight: 600; line-height: 1.4; color: #e8eaf0; }
+.quote .s { font-size: 13px; color: #9aa3b5; margin-top: 10px; }
+
+ul.feat { list-style: none; margin-top: 20px; }
+ul.feat li { padding: 13px 0; border-bottom: 1px solid #1c2029; display: flex; gap: 14px; align-items: flex-start; }
+ul.feat li:last-child { border-bottom: none; }
+ul.feat .ic { color: #4ecdc4; font-weight: 700; flex: 0 0 22px; font-size: 15px; }
+ul.feat .tx { font-size: 15.5px; color: #e8eaf0; }
+ul.feat .tx small { display: block; color: #9aa3b5; font-size: 12.5px; margin-top: 4px; }
+
+.tag { display: inline-block; background: #1c2029; border: 1px solid #272c37; border-radius: 16px;
+  padding: 6px 14px; font-size: 12.5px; color: #9aa3b5; margin: 5px 6px 0 0; }
+.tag b { color: #4ecdc4; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 20px; }
+.panel { background: #171a21; border: 1px solid #272c37; border-radius: 12px; padding: 20px; }
+.panel h3 { font-size: 15px; margin-bottom: 12px; color: #4ecdc4; }
+.panel p { font-size: 13.5px; color: #9aa3b5; line-height: 1.75; }
+.panel p b { color: #e8eaf0; }
+.link { font-family: ui-monospace, monospace; font-size: 12px; color: #4ecdc4; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<!-- ① 封面 -->
+<div class="page">
+  <div class="kicker">RENPU · 仁谱</div>
+  <h1>你的联系人里，<br><em>有多少人其实跟你没关系？</em></h1>
+  <p class="lead">
+    仁谱是一台<b>关系图谱引擎</b>：把微信里几万条聊天记录，
+    算成一张「谁跟谁有关系」的图。<br><br>
+    <b>21823 个联系人</b>里，<b>95.5% 从未说过一句话</b>。
+    仁谱做的第一件事，就是把这个数字摆在你面前。
+  </p>
+  <div class="grid">
+    <div class="card"><div class="n c">21,823</div><div class="l">联系人</div><div class="s">微信库全量</div></div>
+    <div class="card"><div class="n t">184,494</div><div class="l">条消息</div><div class="s">本地解析，零上传</div></div>
+    <div class="card"><div class="n a">35,611</div><div class="l">条关系边</div><div class="s">私聊 + 群共现</div></div>
+    <div class="card"><div class="n v">265</div><div class="l">个群</div><div class="s">圈层自动识别</div></div>
+  </div>
+  <div class="foot"><span>仁谱 Renpu · 关系图谱引擎</span><span>本地优先 · AGPL-3.0</span></div>
+</div>
+
+<!-- ② 核心洞察 -->
+<div class="page">
+  <h2>01 · 一个反直觉的发现</h2>
+  <div class="big">大多数人加的群，<br>跟你<b>没有半毛钱关系</b>。</div>
+  <p class="lead">仁谱把关系拆成两类：<b>私聊</b>（一对一说过话）和<b>群共现</b>（只是在同一个群里）。</p>
+  <div class="funnel">
+    <div class="step"><div class="n c">21,823</div><div class="l">联系人</div><div class="s">微信库全量</div></div>
+    <div class="step"><div class="n t">971</div><div class="l">有消息</div><div class="s">真正说过话</div></div>
+    <div class="step"><div class="n a">233</div><div class="l">核心圈</div><div class="s">私聊 + 群共现</div></div>
+    <div class="step"><div class="n v">557</div><div class="l">纯私聊型</div><div class="s">只私聊，零群共现</div></div>
+  </div>
+  <div class="quote">
+    <div class="t">「340 条私聊，0 个共同群。」</div>
+    <div class="s">仁谱揪出来的这类人：<b>线上从没在群里见过面，私聊却聊了几百条</b>。
+    按「同群即关系」的算法，他们是隐形的；按真实数据，他们才是你最铁的关系。</div>
+  </div>
+  <p class="lead" style="margin-top:18px">
+    <b>消息量不是关系深度。</b>有人消息量第一却已决裂；有人只有 22 条消息，
+    却是线下见过面、聊得愉快的朋友。<b>仁谱把这两件事分开算。</b>
+  </p>
+  <div class="foot"><span>仁谱 · 核心洞察</span><span>02</span></div>
+</div>
+
+<!-- ③ 能力 -->
+<div class="page">
+  <h2>02 · 它能做什么</h2>
+  <ul class="feat">
+    <li><span class="ic">▸</span><span class="tx">关系图谱<small>60 人一屏，圈层自动分色；青色=私聊、灰色=同群、白色=自己。可拖时间轴。</small></span></li>
+    <li><span class="ic">▸</span><span class="tx">3D 关系圈<small>以任意人为中心展开，越靠中心关系越强。拖一下就能转。</small></span></li>
+    <li><span class="ic">▸</span><span class="tx">一人一档<small>关系谱、消息时间线、承诺与待办、最近对话。一个人是一页。</small></span></li>
+    <li><span class="ic">▸</span><span class="tx">Obsidian 导出<small>一人一页 + 关系谱 + 时间线，反向链接自动连上，断链数为 0。</small></span></li>
+    <li><span class="ic">▸</span><span class="tx">全文搜索<small>在几十万条消息里按关键词找人、找事、找承诺。</small></span></li>
+    <li><span class="ic">▸</span><span class="tx">本地 API<small>16 个端点，供 Agent 直接调用；已接入 ClawHunt 任务市场。</small></span></li>
+  </ul>
+  <div class="two">
+    <div class="panel">
+      <h3>技术底座</h3>
+      <p>本地 <b>SQLite</b> · 单文件 HTML（<b>零外链</b>，断网可开）·
+      双击 EXE 即可跑（Windows）· 无运行时外部依赖</p>
+    </div>
+    <div class="panel">
+      <h3>演示即产品</h3>
+      <p>内置<b>虚构演示库</b>：无需导入真实数据即可现场演示全部能力，
+      投屏时不会泄露任何真实联系人。</p>
+    </div>
+  </div>
+  <div class="foot"><span>仁谱 · 能力清单</span><span>03</span></div>
+</div>
+
+<!-- ④ 隐私与落地 -->
+<div class="page">
+  <h2>03 · 隐私与落地</h2>
+  <div class="big">数据<b>不出本机</b>。</div>
+  <p class="lead">所有计算在你自己的电脑上完成。没有上传、没有云端、没有第三方。</p>
+  <div style="margin-top:20px">
+    <span class="tag"><b>本地优先</b></span>
+    <span class="tag"><b>AGPL-3.0</b></span>
+    <span class="tag"><b>一键脱敏</b></span>
+    <span class="tag"><b>断网可演示</b></span>
+  </div>
+  <div class="two">
+    <div class="panel">
+      <h3>分享模式</h3>
+      <p>一键把姓名、群名、账号标识全部替换成占位符。
+      公网暴露时，<b>返回消息正文的端点直接禁用</b>——因为搜索的价值就是内容本身，
+      脱敏后等于无效。</p>
+    </div>
+    <div class="panel">
+      <h3>开源与镜像</h3>
+      <p class="link">github.com/jackyjinggit/renpu</p>
+      <p class="link" style="margin-top:8px">gitee.com/jacky_jiang_gitee/renpu</p>
+      <p style="margin-top:10px">国内可直接 clone，匿名可访问。</p>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:20px">
+    <h3>已接入 ClawHunt</h3>
+    <p>作为 Agent 上架任务市场，能力探针 <b>95/100</b>（file_transfer 90、visual_observation 100），
+    并已对「知识图谱子域」需求<b>提交投标</b>。
+    别人可以像调用工具一样，让仁谱生成关系图谱。</p>
+  </div>
+  <div class="foot"><span>仁谱 · 隐私与落地</span><span>04</span></div>
+</div>
+
+<!-- ⑤ 一句话 -->
+<div class="page">
+  <div class="kicker">RENPU</div>
+  <h1 style="font-size:44px">不是「你认识多少人」，<br>是「<em>谁真的跟你有关系</em>」。</h1>
+  <p class="lead" style="margin-top:24px">
+    仁谱把几十万条聊天记录，变成一张能看懂的关系图。<br><br>
+    它不帮你加更多人。<b>它帮你看清，你已经有的这些人里，谁值得深交。</b>
+  </p>
+  <div class="grid" style="margin-top:36px">
+    <div class="card"><div class="n t">21823 → 971</div><div class="l">联系人 → 有消息</div><div class="s">95.5% 从未说过话</div></div>
+    <div class="card"><div class="n a">557</div><div class="l">纯私聊型</div><div class="s">只私聊、零群共现的「隐形铁关系」</div></div>
+  </div>
+  <div class="panel" style="margin-top:30px">
+    <h3>现在开始</h3>
+    <p>双击 EXE → 自动找微信库 → 浏览器打开图谱。<br>
+    或者先跑演示库：<b>renpu-cli.exe ingest --demo</b><br><br>
+    <span class="link">gitee.com/jacky_jiang_gitee/renpu</span></p>
+  </div>
+  <div class="foot"><span>仁谱 Renpu</span><span>2026-10-30</span></div>
+</div>
+
+</body>
+</html>

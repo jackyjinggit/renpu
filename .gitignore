@@ -40,3 +40,8 @@ grm.db-shm
 build/
 dist/
 *.spec
+
+# 🔴 密钥与本机配置（绝不入仓）
+config/
+*.secret.txt
+clawhunt_secret.txt
